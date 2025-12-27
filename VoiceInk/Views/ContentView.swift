@@ -15,7 +15,7 @@ enum ViewType: String, CaseIterable, Identifiable {
     case audioInput = "Audio Input"
     case dictionary = "Dictionary"
     case settings = "Settings"
-    case license = "VoiceInk Pro"
+    case license = "About"
 
     var id: String { rawValue }
 
@@ -92,16 +92,6 @@ struct ContentView: View {
 
                         Text("VoiceInk")
                             .font(.system(size: 14, weight: .semibold))
-
-                        if case .licensed = licenseViewModel.licenseState {
-                            Text("PRO")
-                                .font(.system(size: 9, weight: .heavy))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(Color.blue)
-                                .cornerRadius(4)
-                        }
 
                         Spacer()
                     }

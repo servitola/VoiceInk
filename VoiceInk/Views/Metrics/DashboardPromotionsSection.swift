@@ -6,20 +6,12 @@ struct DashboardPromotionsSection: View {
     @State private var isAffiliatePromotionDismissed: Bool = UserDefaults.standard.affiliatePromotionDismissed
 
     private var shouldShowUpgradePromotion: Bool {
-        switch licenseState {
-        case .trial(let daysRemaining):
-            return daysRemaining <= 3
-        case .trialExpired:
-            return true
-        case .licensed:
-            return false
-        }
+        // Disabled for open source version
+        return false
     }
 
     private var shouldShowAffiliatePromotion: Bool {
-        if case .licensed = licenseState {
-            return !isAffiliatePromotionDismissed
-        }
+        // Disabled for open source version
         return false
     }
     

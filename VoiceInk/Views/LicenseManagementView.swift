@@ -13,11 +13,7 @@ struct LicenseManagementView: View {
                 
                 // Main Content
                 VStack(spacing: 32) {
-                    if case .licensed = licenseViewModel.licenseState {
-                        activatedContent
-                    } else {
-                        purchaseContent
-                    }
+                    activatedContent
                 }
                 .padding(32)
             }
@@ -37,10 +33,10 @@ struct LicenseManagementView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(.blue)
                     
-                    HStack(alignment: .lastTextBaseline, spacing: 8) { 
-                        Text(licenseViewModel.licenseState == .licensed ? "VoiceInk Pro" : "Upgrade to Pro")
+                    HStack(alignment: .lastTextBaseline, spacing: 8) {
+                        Text("VoiceInk")
                             .font(.system(size: 32, weight: .bold))
-                        
+
                         Text("v\(appVersion)")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
@@ -48,60 +44,56 @@ struct LicenseManagementView: View {
                     }
                 }
                 
-                Text(licenseViewModel.licenseState == .licensed ?
-                     "Thank you for supporting VoiceInk" :
-                     "Transcribe what you say to text instantly with AI")
+                Text("Transcribe what you say to text instantly with AI")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
 
-                if case .licensed = licenseViewModel.licenseState {
-                    HStack(spacing: 40) {
-                        Button {
-                            if let url = URL(string: "https://github.com/Beingpax/VoiceInk/releases") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            featureItem(icon: "list.bullet.clipboard.fill", title: "Changelog", color: .blue)
+                HStack(spacing: 40) {
+                    Button {
+                        if let url = URL(string: "https://github.com/Beingpax/VoiceInk/releases") {
+                            NSWorkspace.shared.open(url)
                         }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            if let url = URL(string: "https://discord.gg/xryDy57nYD") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            featureItem(icon: "bubble.left.and.bubble.right.fill", title: "Discord", color: .purple)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            EmailSupport.openSupportEmail()
-                        } label: {
-                            featureItem(icon: "envelope.fill", title: "Email Support", color: .orange)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            if let url = URL(string: "https://tryvoiceink.com/docs") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            featureItem(icon: "book.fill", title: "Docs", color: .indigo)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            if let url = URL(string: "https://buymeacoffee.com/beingpax") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            animatedTipJarItem()
-                        }
-                        .buttonStyle(.plain)
+                    } label: {
+                        featureItem(icon: "list.bullet.clipboard.fill", title: "Changelog", color: .blue)
                     }
-                    .padding(.top, 8)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        if let url = URL(string: "https://discord.gg/xryDy57nYD") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        featureItem(icon: "bubble.left.and.bubble.right.fill", title: "Discord", color: .purple)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        EmailSupport.openSupportEmail()
+                    } label: {
+                        featureItem(icon: "envelope.fill", title: "Email Support", color: .orange)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        if let url = URL(string: "https://tryvoiceink.com/docs") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        featureItem(icon: "book.fill", title: "Docs", color: .indigo)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        if let url = URL(string: "https://buymeacoffee.com/beingpax") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        animatedTipJarItem()
+                    }
+                    .buttonStyle(.plain)
                 }
+                .padding(.top, 8)
             }
         }
         .padding(.vertical, 60)
@@ -223,7 +215,7 @@ struct LicenseManagementView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 24))
                         .foregroundStyle(.green)
-                    Text("License Active")
+                    Text("Open Source Version")
                         .font(.headline)
                     Spacer()
                     Text("Active")
@@ -233,36 +225,12 @@ struct LicenseManagementView: View {
                         .background(Capsule().fill(.green))
                         .foregroundStyle(.white)
                 }
-                
-                Divider()
-                
-                if licenseViewModel.activationsLimit > 0 {
-                    Text("This license can be activated on up to \(licenseViewModel.activationsLimit) devices")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("You can use VoiceInk Pro on all your personal devices")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(32)
-            .background(CardBackground(isSelected: false))
-            .shadow(color: .black.opacity(0.05), radius: 10)
-            
-            // Deactivation Card
-            VStack(alignment: .leading, spacing: 16) {
-                Text("License Management")
-                    .font(.headline)
 
-                Button(role: .destructive, action: {
-                    licenseViewModel.removeLicense()
-                }) {
-                    Label("Deactivate License", systemImage: "xmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.bordered)
+                Divider()
+
+                Text("VoiceInk is free and open source. You can use it on all your devices without any limitations.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
             .padding(32)
             .background(CardBackground(isSelected: false))
