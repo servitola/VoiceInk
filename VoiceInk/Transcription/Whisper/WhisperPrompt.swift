@@ -85,17 +85,27 @@ class WhisperPrompt: ObservableObject {
     }
     
     func updateTranscriptionPrompt() {
-        // Get the currently selected language from UserDefaults
-        let selectedLanguage = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "en"
-        
-        // Get the prompt for the selected language (custom if available, otherwise default)
-        let basePrompt = getLanguagePrompt(for: selectedLanguage)
-        let prompt = basePrompt.isEmpty ? "" : basePrompt
-        
+        // Get the currently selected languages from UserDefaults
+        let selectedLanguages = UserDefaults.standard.selectedLanguages
+
+        // Combine prompts for all selected languages
+        var combinedPrompt = ""
+        for language in selectedLanguages where language != "auto" {
+            let languagePrompt = getLanguagePrompt(for: language)
+            if !languagePrompt.isEmpty {
+                if !combinedPrompt.isEmpty {
+                    combinedPrompt += " "
+                }
+                combinedPrompt += languagePrompt
+            }
+        }
+
+        let prompt = combinedPrompt.isEmpty ? "" : combinedPrompt
+
         transcriptionPrompt = prompt
         UserDefaults.standard.set(prompt, forKey: "TranscriptionPrompt")
         UserDefaults.standard.synchronize() // Force immediate synchronization
-        
+
         // Notify that the prompt has changed
         NotificationCenter.default.post(name: .promptDidChange, object: nil)
     }

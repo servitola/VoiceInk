@@ -34,10 +34,16 @@ actor WhisperContext {
         let maxThreads = max(1, min(8, cpuCount() - 2))
         var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         
-        // Read language directly from UserDefaults
-        let selectedLanguage = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
-        if selectedLanguage != "auto" {
-            languageCString = Array(selectedLanguage.utf8CString)
+        // Read languages directly from UserDefaults
+        let selectedLanguages = UserDefaults.standard.selectedLanguages
+
+        // If auto is selected or multiple languages, let whisper auto-detect
+        if selectedLanguages.contains("auto") || selectedLanguages.count > 1 {
+            languageCString = nil
+            params.language = nil
+        } else if let firstLanguage = selectedLanguages.first, firstLanguage != "auto" {
+            // Single specific language selected
+            languageCString = Array(firstLanguage.utf8CString)
             params.language = languageCString?.withUnsafeBufferPointer { ptr in
                 ptr.baseAddress
             }
