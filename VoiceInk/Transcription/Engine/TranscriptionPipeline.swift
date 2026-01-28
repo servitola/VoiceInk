@@ -68,6 +68,8 @@ class TranscriptionPipeline {
             logger.notice("📝 Transcript: \(text, privacy: .public)")
             text = TranscriptionOutputFilter.filter(text)
             logger.notice("📝 Output filter result: \(text, privacy: .public)")
+            text = TranscriptionOutputFilter.removeWakeWord(from: text)
+            logger.notice("📝 After wake word removal: \(text, privacy: .public)")
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
 
             let powerModeManager = PowerModeManager.shared

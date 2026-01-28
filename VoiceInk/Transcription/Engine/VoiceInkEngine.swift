@@ -12,6 +12,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
     var partialTranscript: String = ""
     var currentSession: TranscriptionSession?
 
+    // Wake word detection
+    @Published var isWakeWordListening = false
+    var wakeWordService: WakeWordListeningService?
+
     let recorder = Recorder()
     var recordedFile: URL? = nil
     let recordingsDirectory: URL
@@ -62,6 +66,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
         setupNotifications()
         createRecordingsDirectoryIfNeeded()
+        initializeWakeWordService()
     }
 
     private func createRecordingsDirectoryIfNeeded() {
@@ -115,6 +120,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
             }
         } else {
             logger.notice("toggleRecord: entering start-recording branch")
+            // Stop wake word listening when starting manual recording
+            if isWakeWordListening {
+                await stopWakeWordListening()
+            }
+
             guard transcriptionModelManager.currentTranscriptionModel != nil else {
                 NotificationManager.shared.showNotification(title: "No AI Model Selected", type: .error)
                 return

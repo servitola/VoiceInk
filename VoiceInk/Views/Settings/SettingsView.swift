@@ -61,6 +61,229 @@ struct SettingsView: View {
                                 KeyboardShortcuts.Recorder(for: .toggleMiniRecorder2)
                                     .controlSize(.small)
                             }
+                        }
+                        .onChange(of: isCustomCancelEnabled) { _, newValue in
+                            if !newValue {
+                                KeyboardShortcuts.setShortcut(nil, for: .cancelRecorder)
+                            }
+                        }
+
+                        Divider()
+
+                        ExpandableToggleSection(
+                            section: .middleClick,
+                            title: "Enable Middle-Click Toggle",
+                            helpText: "Use middle mouse button to toggle VoiceInk recording.",
+                            isEnabled: $hotkeyManager.isMiddleClickToggleEnabled,
+                            expandedSections: $expandedSections
+                        ) {
+                            HStack(spacing: 8) {
+                                Text("Activation Delay")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.secondary)
+
+                                TextField("", value: $hotkeyManager.middleClickActivationDelay, formatter: {
+                                    let formatter = NumberFormatter()
+                                    formatter.numberStyle = .none
+                                    formatter.minimum = 0
+                                    return formatter
+                                }())
+                                .textFieldStyle(PlainTextFieldStyle())
+                                .padding(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
+                                .background(Color(NSColor.textBackgroundColor))
+                                .cornerRadius(5)
+                                .frame(width: 70)
+
+                                Text("ms")
+                                    .foregroundColor(.secondary)
+
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+
+                SettingsSection(
+                    icon: "speaker.wave.2.bubble.left.fill",
+                    title: "Recording Feedback",
+                    subtitle: "Customize app & system feedback"
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ExpandableToggleSection(
+                            section: .soundFeedback,
+                            title: "Sound feedback",
+                            helpText: "Play sounds when recording starts and stops",
+                            isEnabled: $soundManager.isEnabled,
+                            expandedSections: $expandedSections
+                        ) {
+                            CustomSoundSettingsView()
+                        }
+
+                        Divider()
+
+                        ExpandableToggleSection(
+                            section: .systemMute,
+                            title: "Mute system audio during recording",
+                            helpText: "Automatically mute system audio when recording starts and restore when recording stops",
+                            isEnabled: $mediaController.isSystemMuteEnabled,
+                            expandedSections: $expandedSections
+                        ) {
+                            HStack(spacing: 8) {
+                                Text("Resume Delay")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.secondary)
+
+                                Picker("", selection: $mediaController.audioResumptionDelay) {
+                                    Text("0s").tag(0.0)
+                                    Text("1s").tag(1.0)
+                                    Text("2s").tag(2.0)
+                                    Text("3s").tag(3.0)
+                                    Text("4s").tag(4.0)
+                                    Text("5s").tag(5.0)
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 80)
+
+                                InfoTip(
+                                    title: "Audio Resume Delay",
+                                    message: "Delay before unmuting system audio after recording stops. Useful for Bluetooth headphones that need time to switch from microphone mode back to high-quality audio mode. Recommended: 2s for AirPods/Bluetooth headphones, 0s for wired headphones."
+                                )
+
+                                Spacer()
+                            }
+                        }
+
+                        Divider()
+
+                        ExpandableToggleSection(
+                            section: .clipboardRestore,
+                            title: "Restore clipboard after paste",
+                            helpText: "When enabled, VoiceInk will restore your original clipboard content after pasting the transcription.",
+                            isEnabled: $restoreClipboardAfterPaste,
+                            expandedSections: $expandedSections
+                        ) {
+                            HStack(spacing: 8) {
+                                Text("Restore Delay")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.secondary)
+
+                                Picker("", selection: $clipboardRestoreDelay) {
+                                    Text("1s").tag(1.0)
+                                    Text("2s").tag(2.0)
+                                    Text("3s").tag(3.0)
+                                    Text("4s").tag(4.0)
+                                    Text("5s").tag(5.0)
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 80)
+
+                                Spacer()
+                            }
+                        }
+
+                    }
+                }
+
+                SettingsSection(
+                    icon: "waveform.badge.mic",
+                    title: "Wake Word Detection",
+                    subtitle: "Activate recording with a voice command"
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Enable continuous listening for a wake word to start recording hands-free.")
+                            .settingsDescription()
+
+                        NavigationLink(destination: WakeWordSettingsView()) {
+                            Text("Configure Wake Word")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                PowerModeSettingsSection()
+
+                ExperimentalFeaturesSection()
+
+                SettingsSection(
+                    icon: "doc.on.clipboard",
+                    title: "Paste Method",
+                    subtitle: "Choose how text is pasted"
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Select the method used to paste text. Use AppleScript if you have a non-standard keyboard layout.")
+                            .settingsDescription()
+
+                        Toggle("Use AppleScript Paste Method", isOn: Binding(
+                            get: { UserDefaults.standard.bool(forKey: "UseAppleScriptPaste") },
+                            set: { UserDefaults.standard.set($0, forKey: "UseAppleScriptPaste") }
+                        ))
+                        .toggleStyle(.switch)
+                    }
+                }
+
+                SettingsSection(
+                    icon: "gear",
+                    title: "General",
+                    subtitle: "Appearance, startup, and updates"
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Hide Dock Icon (Menu Bar Only)", isOn: $menuBarManager.isMenuBarOnly)
+                            .toggleStyle(.switch)
+                        
+                        LaunchAtLogin.Toggle()
+                            .toggleStyle(.switch)
+
+                        Toggle("Enable automatic update checks", isOn: $autoUpdateCheck)
+                            .toggleStyle(.switch)
+                            .onChange(of: autoUpdateCheck) { _, newValue in
+                                updaterViewModel.toggleAutoUpdates(newValue)
+                            }
+                        
+                        Toggle("Show app announcements", isOn: $enableAnnouncements)
+                            .toggleStyle(.switch)
+                            .onChange(of: enableAnnouncements) { _, newValue in
+                                if newValue {
+                                    AnnouncementsService.shared.start()
+                                } else {
+                                    AnnouncementsService.shared.stop()
+                                }
+                            }
+                        
+                        Button("Check for Updates Now") {
+                            updaterViewModel.checkForUpdates()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .disabled(!updaterViewModel.canCheckForUpdates)
+                        
+                        Divider()
+
+                        Button("Reset Onboarding") {
+                            showResetOnboardingAlert = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    }
+                }
+
+                SettingsSection(
+                    icon: "lock.shield",
+                    title: "Data & Privacy",
+                    subtitle: "Control transcript history and storage"
+                ) {
+                    AudioCleanupSettingsView()
+                }
+                
+                SettingsSection(
+                    icon: "arrow.up.arrow.down.circle",
+                    title: "Data Management",
+                    subtitle: "Import or export your settings"
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Export your custom prompts, power modes, word replacements, keyboard shortcuts, and app preferences to a backup file. API keys are not included in the export.")
+                            .settingsDescription()
+
+                        HStack(spacing: 12) {
                             Button {
                                 withAnimation { hotkeyManager.selectedHotkey2 = .none }
                             } label: {

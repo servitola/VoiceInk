@@ -151,6 +151,9 @@ class RecorderUIManager: ObservableObject {
             engine.recordingState = .idle
         }
         logger.notice("dismissMiniRecorder completed")
+
+        // Resume wake word listening if enabled
+        await engine?.resumeWakeWordListeningIfEnabled()
     }
 
     func resetOnLaunch() async {
