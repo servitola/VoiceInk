@@ -53,15 +53,31 @@ brew install --cask voiceink
 ```
 
 ### Build from Source
-As an open-source project, you can build VoiceInk yourself by following the instructions in [BUILDING.md](BUILDING.md). However, the compiled version includes additional benefits like automatic updates, priority support via Discord and email, and helps fund ongoing development.
+As an open-source project, you can build VoiceInk yourself by following the detailed instructions in [BUILDING.md](BUILDING.md).
+
+**Requirements for building**:
+- macOS 14.0+ (Sonoma or newer)
+- Xcode 15.0+ with Command Line Tools
+- ~5GB free disk space
+
+The [Building Guide](BUILDING.md) includes:
+- Automated build setup using `make` commands
+- Complete prerequisites checklist
+- Troubleshooting for common build errors
+- Manual build instructions if needed
+
+Note: The compiled version from [tryvoiceink.com](https://tryvoiceink.com) includes additional benefits like automatic updates, priority support, and helps fund ongoing development.
 
 ## Requirements
 
-- macOS 14.4 or later
+- **macOS 14.0 or later** (macOS Sonoma or newer)
+- **Platform**: macOS only - this is not an iOS app
 
 ## Documentation
 
 - [Building from Source](BUILDING.md) - Detailed instructions for building the project
+- [Dependencies](DEPENDENCIES.md) - Complete list of all dependencies and how to manage them
+- [Common Issues](COMMON-ISSUES.md) - Predicted issues on fresh macOS installations and solutions
 - [Contributing Guidelines](CONTRIBUTING.md) - How to contribute to VoiceInk
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Our community standards
 

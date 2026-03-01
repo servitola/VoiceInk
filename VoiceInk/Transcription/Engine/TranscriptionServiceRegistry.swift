@@ -15,8 +15,11 @@ class TranscriptionServiceRegistry {
         modelProvider: modelProvider
     )
     private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
+    #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled - requires macOS 26 APIs
     private(set) lazy var nativeAppleTranscriptionService = NativeAppleTranscriptionService()
     private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
+    #endif
+    private(set) lazy var parakeetTranscriptionService = ParakeetTranscriptionService()
 
     init(modelProvider: any WhisperModelProvider, modelsDirectory: URL, modelContext: ModelContext) {
         self.modelProvider = modelProvider
@@ -31,7 +34,12 @@ class TranscriptionServiceRegistry {
         case .fluidAudio:
             return fluidAudioTranscriptionService
         case .nativeApple:
+            #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled
             return nativeAppleTranscriptionService
+            #else
+            logger.warning("Native Apple transcription requested but not available (requires macOS 26 APIs). Falling back to cloud transcription.")
+            return cloudTranscriptionService
+            #endif
         default:
             return cloudTranscriptionService
         }

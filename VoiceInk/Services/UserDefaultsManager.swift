@@ -8,18 +8,21 @@ extension UserDefaults {
         static let affiliatePromotionDismissed = "VoiceInkAffiliatePromotionDismissed"
         static let selectedLanguages = "SelectedLanguages"
 
+        static let aiProviderApiKey = "aiProviderApiKey"
+        static let licenseKey = "licenseKey"
+
         // Obfuscated keys for license-related data
         enum License {
             static let trialStartDate = "VoiceInkTrialStartDate"
         }
     }
-    
+
     // MARK: - AI Provider API Key
     var aiProviderApiKey: String? {
         get { string(forKey: Keys.aiProviderApiKey) }
         set { setValue(newValue, forKey: Keys.aiProviderApiKey) }
     }
-    
+
     // MARK: - License Key
     var licenseKey: String? {
         get { string(forKey: Keys.licenseKey) }

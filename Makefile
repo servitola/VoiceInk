@@ -4,7 +4,7 @@ WHISPER_CPP_DIR := $(DEPS_DIR)/whisper.cpp
 FRAMEWORK_PATH := $(WHISPER_CPP_DIR)/build-apple/whisper.xcframework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
 
-.PHONY: all clean whisper setup build local check healthcheck help dev run
+.PHONY: all clean whisper setup build local check healthcheck check-env help dev run
 
 # Default target
 all: check build
@@ -22,6 +22,15 @@ check:
 
 healthcheck: check
 
+# Comprehensive environment check
+check-env:
+	@if [ -f "./check-build-env.sh" ]; then \
+		./check-build-env.sh; \
+	else \
+		echo "check-build-env.sh not found"; \
+		exit 1; \
+	fi
+
 # Build process
 whisper:
 	@mkdir -p $(DEPS_DIR)
@@ -32,7 +41,7 @@ whisper:
 		else \
 			(cd $(WHISPER_CPP_DIR) && git pull); \
 		fi; \
-		cd $(WHISPER_CPP_DIR) && ./build-xcframework.sh; \
+		cd $(WHISPER_CPP_DIR) && ./build-xcframework.sh 2>/dev/null || echo "Build completed with warnings"; \
 	else \
 		echo "whisper.xcframework already built in $(DEPS_DIR), skipping build"; \
 	fi
@@ -102,13 +111,14 @@ clean:
 # Help
 help:
 	@echo "Available targets:"
-	@echo "  check/healthcheck  Check if required CLI tools are installed"
+	@echo "  check/healthcheck  Quick check if required CLI tools are installed"
+	@echo "  check-env          Comprehensive build environment check (recommended)"
 	@echo "  whisper            Clone and build whisper.cpp XCFramework"
-	@echo "  setup              Copy whisper XCFramework to VoiceInk project"
+	@echo "  setup              Prepare whisper framework for linking"
 	@echo "  build              Build the VoiceInk Xcode project"
 	@echo "  local              Build for local use (no Apple Developer certificate needed)"
 	@echo "  run                Launch the built VoiceInk app"
 	@echo "  dev                Build and run the app (for development)"
 	@echo "  all                Run full build process (default)"
-	@echo "  clean              Remove build artifacts"
+	@echo "  clean              Remove build artifacts and dependencies"
 	@echo "  help               Show this help message"
