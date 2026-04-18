@@ -4,7 +4,7 @@ WHISPER_CPP_DIR := $(DEPS_DIR)/whisper.cpp
 FRAMEWORK_PATH := $(WHISPER_CPP_DIR)/build-apple/whisper.xcframework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
 
-.PHONY: all clean whisper setup build local check healthcheck check-env help dev run
+.PHONY: all clean whisper setup build local check healthcheck check-env help dev run cli install-cli
 
 # Default target
 all: check build
@@ -102,6 +102,14 @@ run:
 		fi; \
 	fi
 
+# CLI tool for dictionary export/import
+cli:
+	swiftc -O -o VoiceInkCLI/voiceink VoiceInkCLI/voiceink.swift -lsqlite3
+
+install-cli: cli
+	install -m 755 VoiceInkCLI/voiceink /usr/local/bin/voiceink
+	@echo "Installed to /usr/local/bin/voiceink"
+
 # Cleanup
 clean:
 	@echo "Cleaning build artifacts..."
@@ -120,5 +128,7 @@ help:
 	@echo "  run                Launch the built VoiceInk app"
 	@echo "  dev                Build and run the app (for development)"
 	@echo "  all                Run full build process (default)"
+	@echo "  cli                Build the voiceink CLI tool"
+	@echo "  install-cli        Build and install CLI to /usr/local/bin/voiceink"
 	@echo "  clean              Remove build artifacts and dependencies"
 	@echo "  help               Show this help message"

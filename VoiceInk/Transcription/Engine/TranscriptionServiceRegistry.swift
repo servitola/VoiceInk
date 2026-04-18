@@ -17,9 +17,8 @@ class TranscriptionServiceRegistry {
     private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
     #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled - requires macOS 26 APIs
     private(set) lazy var nativeAppleTranscriptionService = NativeAppleTranscriptionService()
-    private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
     #endif
-    private(set) lazy var parakeetTranscriptionService = ParakeetTranscriptionService()
+    private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
 
     init(modelProvider: any WhisperModelProvider, modelsDirectory: URL, modelContext: ModelContext) {
         self.modelProvider = modelProvider
@@ -76,7 +75,7 @@ class TranscriptionServiceRegistry {
         return UserDefaults.standard.object(forKey: "streaming-enabled-\(model.name)") as? Bool ?? true
     }
 
-    func cleanup() async {
-        await fluidAudioTranscriptionService.cleanup()
-    }
-}
+     func cleanup() async {
+         await fluidAudioTranscriptionService.cleanup()
+     }
+ }
