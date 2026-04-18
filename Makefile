@@ -2,9 +2,10 @@
 DEPS_DIR := $(HOME)/VoiceInk-Dependencies
 WHISPER_CPP_DIR := $(DEPS_DIR)/whisper.cpp
 FRAMEWORK_PATH := $(WHISPER_CPP_DIR)/build-apple/whisper.xcframework
+WHISPER_MACOS_SLICE := $(FRAMEWORK_PATH)/macos-arm64_x86_64/whisper.framework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
 
-.PHONY: all clean whisper setup build local check healthcheck check-env help dev run cli install-cli
+.PHONY: all clean whisper setup build local check healthcheck check-env help dev run cli install-cli fix-derived-app
 
 # Default target
 all: check build
@@ -45,6 +46,13 @@ whisper:
 	else \
 		echo "whisper.xcframework already built in $(DEPS_DIR), skipping build"; \
 	fi
+	@if [ -d "$(WHISPER_MACOS_SLICE)" ]; then \
+		echo "Ad-hoc signing whisper.framework (macos-arm64_x86_64)..."; \
+		codesign --force --sign - "$(WHISPER_MACOS_SLICE)/Versions/A/whisper" >/dev/null; \
+		codesign --force --sign - "$(WHISPER_MACOS_SLICE)" >/dev/null; \
+	else \
+		echo "Warning: macos slice not found at $(WHISPER_MACOS_SLICE)"; \
+	fi
 
 setup: whisper
 	@echo "Whisper framework is ready at $(FRAMEWORK_PATH)"
@@ -52,6 +60,16 @@ setup: whisper
 
 build: setup
 	xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug CODE_SIGN_IDENTITY="" build
+	@$(MAKE) --no-print-directory fix-derived-app
+
+# Add missing libwhisper.1.dylib symlink to the Debug build in DerivedData so
+# the app can launch (framework binary has install name @rpath/libwhisper.1.dylib).
+fix-derived-app:
+	@APP_PATH=$$(find "$$HOME/Library/Developer/Xcode/DerivedData" -path "*VoiceInk*/Build/Products/Debug/VoiceInk.app" -type d -prune 2>/dev/null | head -1); \
+	if [ -n "$$APP_PATH" ] && [ -d "$$APP_PATH/Contents/Frameworks/whisper.framework" ]; then \
+		echo "Ensuring libwhisper.1.dylib symlink in $$APP_PATH/Contents/Frameworks..."; \
+		ln -sfn whisper.framework/Versions/A/whisper "$$APP_PATH/Contents/Frameworks/libwhisper.1.dylib"; \
+	fi
 
 # Build for local use without Apple Developer certificate
 local: check setup
@@ -73,6 +91,11 @@ local: check setup
 		rm -rf "$$HOME/Downloads/VoiceInk.app"; \
 		ditto "$$APP_PATH" "$$HOME/Downloads/VoiceInk.app"; \
 		xattr -cr "$$HOME/Downloads/VoiceInk.app"; \
+		FRAMEWORKS_DIR="$$HOME/Downloads/VoiceInk.app/Contents/Frameworks"; \
+		if [ -d "$$FRAMEWORKS_DIR/whisper.framework" ]; then \
+			echo "Adding libwhisper.1.dylib symlink inside app bundle..."; \
+			ln -sfn whisper.framework/Versions/A/whisper "$$FRAMEWORKS_DIR/libwhisper.1.dylib"; \
+		fi; \
 		echo ""; \
 		echo "Build complete! App saved to: ~/Downloads/VoiceInk.app"; \
 		echo "Run with: open ~/Downloads/VoiceInk.app"; \

@@ -192,11 +192,10 @@ class TranscriptionPipeline {
                 let appendSpace = UserDefaults.standard.bool(forKey: "AppendTrailingSpace")
                 CursorPaster.pasteAtCursor(textToPaste + (appendSpace ? " " : ""))
 
-                    let powerMode = PowerModeManager.shared
-                    if let activeConfig = powerMode.currentActiveConfiguration, activeConfig.autoSendKey.isEnabled {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            CursorPaster.performAutoSend(activeConfig.autoSendKey)
-                        }
+                let powerMode = PowerModeManager.shared
+                if let activeConfig = powerMode.currentActiveConfiguration, activeConfig.autoSendKey.isEnabled {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        CursorPaster.performAutoSend(activeConfig.autoSendKey)
                     }
                 }
             }
