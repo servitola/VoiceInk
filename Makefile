@@ -4,6 +4,7 @@ WHISPER_CPP_DIR := $(DEPS_DIR)/whisper.cpp
 FRAMEWORK_PATH := $(WHISPER_CPP_DIR)/build-apple/whisper.xcframework
 WHISPER_MACOS_SLICE := $(FRAMEWORK_PATH)/macos-arm64_x86_64/whisper.framework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
+INSTALL_PATH := /Applications/VoiceInk.app
 
 .PHONY: all clean whisper setup build local check healthcheck check-env help dev run cli install-cli fix-derived-app
 
@@ -47,6 +48,10 @@ whisper:
 		echo "whisper.xcframework already built in $(DEPS_DIR), skipping build"; \
 	fi
 	@if [ -d "$(WHISPER_MACOS_SLICE)" ]; then \
+		if [ -L "$(WHISPER_MACOS_SLICE)/Versions/A/A" ]; then \
+			echo "Removing stray self-referencing Versions/A/A symlink..."; \
+			rm -f "$(WHISPER_MACOS_SLICE)/Versions/A/A"; \
+		fi; \
 		echo "Ad-hoc signing whisper.framework (macos-arm64_x86_64)..."; \
 		codesign --force --sign - "$(WHISPER_MACOS_SLICE)/Versions/A/whisper" >/dev/null; \
 		codesign --force --sign - "$(WHISPER_MACOS_SLICE)" >/dev/null; \
@@ -87,18 +92,24 @@ local: check setup
 		build
 	@APP_PATH="$(LOCAL_DERIVED_DATA)/Build/Products/Debug/VoiceInk.app" && \
 	if [ -d "$$APP_PATH" ]; then \
-		echo "Copying VoiceInk.app to ~/Downloads..."; \
-		rm -rf "$$HOME/Downloads/VoiceInk.app"; \
-		ditto "$$APP_PATH" "$$HOME/Downloads/VoiceInk.app"; \
-		xattr -cr "$$HOME/Downloads/VoiceInk.app"; \
-		FRAMEWORKS_DIR="$$HOME/Downloads/VoiceInk.app/Contents/Frameworks"; \
+		if pgrep -x VoiceInk >/dev/null; then \
+			echo "Quitting running VoiceInk before install..."; \
+			osascript -e 'tell application "VoiceInk" to quit' 2>/dev/null || true; \
+			sleep 1; \
+			pkill -9 -x VoiceInk 2>/dev/null || true; \
+		fi; \
+		echo "Installing VoiceInk.app to $(INSTALL_PATH)..."; \
+		rm -rf "$(INSTALL_PATH)"; \
+		ditto "$$APP_PATH" "$(INSTALL_PATH)"; \
+		xattr -cr "$(INSTALL_PATH)"; \
+		FRAMEWORKS_DIR="$(INSTALL_PATH)/Contents/Frameworks"; \
 		if [ -d "$$FRAMEWORKS_DIR/whisper.framework" ]; then \
 			echo "Adding libwhisper.1.dylib symlink inside app bundle..."; \
 			ln -sfn whisper.framework/Versions/A/whisper "$$FRAMEWORKS_DIR/libwhisper.1.dylib"; \
 		fi; \
 		echo ""; \
-		echo "Build complete! App saved to: ~/Downloads/VoiceInk.app"; \
-		echo "Run with: open ~/Downloads/VoiceInk.app"; \
+		echo "Build complete! App installed to: $(INSTALL_PATH)"; \
+		echo "Run with: open $(INSTALL_PATH)"; \
 		echo ""; \
 		echo "Limitations of local builds:"; \
 		echo "  - No iCloud dictionary sync"; \
@@ -110,9 +121,9 @@ local: check setup
 
 # Run application
 run:
-	@if [ -d "$$HOME/Downloads/VoiceInk.app" ]; then \
-		echo "Opening ~/Downloads/VoiceInk.app..."; \
-		open "$$HOME/Downloads/VoiceInk.app"; \
+	@if [ -d "$(INSTALL_PATH)" ]; then \
+		echo "Opening $(INSTALL_PATH)..."; \
+		open "$(INSTALL_PATH)"; \
 	else \
 		echo "Looking for VoiceInk.app in DerivedData..."; \
 		APP_PATH=$$(find "$$HOME/Library/Developer/Xcode/DerivedData" -name "VoiceInk.app" -type d | head -1) && \
