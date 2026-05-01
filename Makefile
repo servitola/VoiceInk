@@ -6,7 +6,7 @@ WHISPER_MACOS_SLICE := $(FRAMEWORK_PATH)/macos-arm64_x86_64/whisper.framework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
 INSTALL_PATH := /Applications/VoiceInk.app
 
-.PHONY: all clean whisper setup build local check healthcheck check-env help dev run cli install-cli fix-derived-app
+.PHONY: all clean whisper setup build local local-stable check healthcheck check-env help dev run cli install-cli fix-derived-app
 
 # Default target
 all: check build
@@ -76,14 +76,22 @@ fix-derived-app:
 		ln -sfn whisper.framework/Versions/A/whisper "$$APP_PATH/Contents/Frameworks/libwhisper.1.dylib"; \
 	fi
 
-# Build for local use without Apple Developer certificate
+# Build for local use without Apple Developer certificate.
+# LOCAL_SIGN_IDENTITY may be overridden (e.g. by `local-stable`) to use a real
+# code-signing identity so macOS TCC permissions survive future rebuilds.
+LOCAL_SIGN_IDENTITY ?= -
+
 local: check setup
-	@echo "Building VoiceInk for local use (no Apple Developer certificate required)..."
+	@if [ "$(LOCAL_SIGN_IDENTITY)" = "-" ]; then \
+		echo "Building VoiceInk for local use (ad-hoc signing — TCC permissions reset on each rebuild)..."; \
+	else \
+		echo "Building VoiceInk for local use (signing identity: $(LOCAL_SIGN_IDENTITY) — TCC permissions stable across rebuilds)..."; \
+	fi
 	@rm -rf "$(LOCAL_DERIVED_DATA)"
 	xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
 		-derivedDataPath "$(LOCAL_DERIVED_DATA)" \
 		-xcconfig LocalBuild.xcconfig \
-		CODE_SIGN_IDENTITY="-" \
+		CODE_SIGN_IDENTITY="$(LOCAL_SIGN_IDENTITY)" \
 		CODE_SIGNING_REQUIRED=NO \
 		CODE_SIGNING_ALLOWED=YES \
 		DEVELOPMENT_TEAM="" \
@@ -107,6 +115,15 @@ local: check setup
 			echo "Adding libwhisper.1.dylib symlink inside app bundle..."; \
 			ln -sfn whisper.framework/Versions/A/whisper "$$FRAMEWORKS_DIR/libwhisper.1.dylib"; \
 		fi; \
+		if [ "$(LOCAL_SIGN_IDENTITY)" != "-" ]; then \
+			echo "Re-signing with $(LOCAL_SIGN_IDENTITY) so TCC permissions persist..."; \
+			ENTITLEMENTS="$(CURDIR)/VoiceInk/VoiceInk.local.entitlements"; \
+			SIGN_FLAGS="--force --sign $(LOCAL_SIGN_IDENTITY) --timestamp=none"; \
+			find "$(INSTALL_PATH)/Contents/MacOS" -maxdepth 1 -type f -name "*.dylib" | while read mach; do \
+				codesign $$SIGN_FLAGS "$$mach" >/dev/null 2>&1 || true; \
+			done; \
+			codesign $$SIGN_FLAGS --deep --entitlements "$$ENTITLEMENTS" "$(INSTALL_PATH)" >/dev/null; \
+		fi; \
 		echo ""; \
 		echo "Build complete! App installed to: $(INSTALL_PATH)"; \
 		echo "Run with: open $(INSTALL_PATH)"; \
@@ -118,6 +135,26 @@ local: check setup
 		echo "Error: Could not find built VoiceInk.app at $$APP_PATH"; \
 		exit 1; \
 	fi
+
+# Build with a stable, dedicated self-signed identity so TCC permissions
+# (mic, accessibility, screen recording, input monitoring, apple events)
+# survive future rebuilds. The first run creates the certificate; subsequent
+# runs reuse it. Override with `LOCAL_SIGN_IDENTITY=<sha1-or-name>` if needed.
+LOCAL_SIGN_CERT_NAME := VoiceInk Local Signing
+
+local-stable: check
+	@if [ -z "$$LOCAL_SIGN_IDENTITY" ] || [ "$$LOCAL_SIGN_IDENTITY" = "-" ]; then \
+		./scripts/create-local-signing-cert.sh; \
+		IDENTITY=$$(security find-certificate -c "$(LOCAL_SIGN_CERT_NAME)" -Z 2>/dev/null | awk '/SHA-1 hash:/ {print $$3; exit}'); \
+		if [ -z "$$IDENTITY" ]; then \
+			echo "Failed to locate '$(LOCAL_SIGN_CERT_NAME)' in keychain after creation."; \
+			exit 1; \
+		fi; \
+	else \
+		IDENTITY="$$LOCAL_SIGN_IDENTITY"; \
+	fi; \
+	echo "Using signing identity: $$IDENTITY"; \
+	$(MAKE) --no-print-directory local LOCAL_SIGN_IDENTITY="$$IDENTITY"
 
 # Run application
 run:
@@ -158,7 +195,8 @@ help:
 	@echo "  whisper            Clone and build whisper.cpp XCFramework"
 	@echo "  setup              Prepare whisper framework for linking"
 	@echo "  build              Build the VoiceInk Xcode project"
-	@echo "  local              Build for local use (no Apple Developer certificate needed)"
+	@echo "  local              Build for local use (ad-hoc — TCC perms reset on rebuild)"
+	@echo "  local-stable       Build with a stable codesign identity (TCC perms persist)"
 	@echo "  run                Launch the built VoiceInk app"
 	@echo "  dev                Build and run the app (for development)"
 	@echo "  all                Run full build process (default)"
