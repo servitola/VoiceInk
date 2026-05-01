@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import AppKit
 
 // MARK: - JSON Model (matches DictionaryImportExportService.swift)
 
@@ -247,18 +248,172 @@ func importDictionary(from path: String) {
     }
 }
 
+// MARK: - Transcription via running VoiceInk app
+
+let voiceInkBundleId = "com.prakashjoshipax.VoiceInk"
+let requestNotificationName = "com.prakashjoshipax.VoiceInk.cli.transcribe.request"
+let readyNotificationName = "com.prakashjoshipax.VoiceInk.cli.ready"
+let responseNamePrefix = "com.prakashjoshipax.VoiceInk.cli.transcribe.response."
+
+/// Result captured from the response notification.
+final class TranscriptionResult {
+    var text: String?
+    var enhancedText: String?
+    var modelName: String?
+    var error: String?
+    var received = false
+}
+
+/// Helper: launch VoiceInk in the background (no window activation) if it isn't already running.
+func ensureVoiceInkRunning() {
+    let workspace = NSWorkspace.shared
+    let isRunning = workspace.runningApplications.contains { $0.bundleIdentifier == voiceInkBundleId }
+    if isRunning { return }
+
+    guard let appURL = workspace.urlForApplication(withBundleIdentifier: voiceInkBundleId) else {
+        fputs("VoiceInk app not found. Install it from /Applications or via `make local`.\n", stderr)
+        exit(1)
+    }
+
+    let config = NSWorkspace.OpenConfiguration()
+    config.activates = false
+    config.addsToRecentItems = false
+    config.hides = true
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var launchError: Error?
+    workspace.openApplication(at: appURL, configuration: config) { _, error in
+        launchError = error
+        semaphore.signal()
+    }
+    _ = semaphore.wait(timeout: .now() + 10)
+
+    if let launchError {
+        fputs("Failed to launch VoiceInk: \(launchError.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
+
+func transcribe(audioPath: String, timeout: TimeInterval = 600) {
+    let resolved = (audioPath as NSString).expandingTildeInPath
+    let absolute: String
+    if (resolved as NSString).isAbsolutePath {
+        absolute = resolved
+    } else {
+        absolute = (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(resolved)
+    }
+
+    guard FileManager.default.fileExists(atPath: absolute) else {
+        fputs("File not found: \(absolute)\n", stderr)
+        exit(1)
+    }
+
+    ensureVoiceInkRunning()
+
+    let id = UUID().uuidString
+    let center = DistributedNotificationCenter.default()
+    let result = TranscriptionResult()
+
+    let userInfo: [String: String] = [
+        "id": id,
+        "audioPath": absolute
+    ]
+
+    // Tracks whether we've already posted the request (after bridge readiness).
+    var requestPosted = false
+
+    func postRequestOnce() {
+        if requestPosted { return }
+        requestPosted = true
+        center.postNotificationName(
+            Notification.Name(requestNotificationName),
+            object: nil,
+            userInfo: userInfo,
+            deliverImmediately: true
+        )
+    }
+
+    // Listen for the response addressed to this request id.
+    let responseName = Notification.Name(responseNamePrefix + id)
+    let responseObserver = center.addObserver(
+        forName: responseName,
+        object: nil,
+        queue: .main
+    ) { note in
+        let info = note.userInfo ?? [:]
+        let ok = (info["ok"] as? Bool) ?? false
+        if ok {
+            result.text = info["text"] as? String
+            result.enhancedText = info["enhancedText"] as? String
+            result.modelName = info["modelName"] as? String
+        } else {
+            result.error = info["error"] as? String ?? "Unknown error"
+        }
+        result.received = true
+        CFRunLoopStop(CFRunLoopGetCurrent())
+    }
+
+    // Listen for the bridge `ready` notification — this is the signal that
+    // VoiceInk has finished launching and our request will not be missed.
+    let readyObserver = center.addObserver(
+        forName: Notification.Name(readyNotificationName),
+        object: nil,
+        queue: .main
+    ) { _ in postRequestOnce() }
+
+    defer {
+        center.removeObserver(readyObserver)
+        center.removeObserver(responseObserver)
+    }
+
+    // If the app was already running before we asked it to open, the bridge is
+    // already up — post immediately. The bridge dedupes by id, so a second post
+    // triggered by an extra `ready` ping is harmless.
+    let appAlreadyRunning = NSWorkspace.shared.runningApplications.contains {
+        $0.bundleIdentifier == voiceInkBundleId && $0.isFinishedLaunching
+    }
+    if appAlreadyRunning {
+        postRequestOnce()
+    }
+
+    // One-shot timeout.
+    let timeoutTimer = Timer(timeInterval: timeout, repeats: false) { _ in
+        CFRunLoopStop(CFRunLoopGetCurrent())
+    }
+    RunLoop.current.add(timeoutTimer, forMode: .default)
+
+    CFRunLoopRun()
+
+    timeoutTimer.invalidate()
+
+    if !result.received {
+        fputs("Timed out after \(Int(timeout))s waiting for VoiceInk to transcribe.\n", stderr)
+        exit(2)
+    }
+
+    if let error = result.error {
+        fputs("\(error)\n", stderr)
+        exit(1)
+    }
+
+    let output = result.text ?? ""
+    print(output)
+}
+
 // MARK: - Main
 
 func printUsage() {
     let name = (CommandLine.arguments[0] as NSString).lastPathComponent
     fputs("""
-    Usage: \(name) <command> <path>
-
-    Commands:
-      export <path>  Export dictionary to JSON file
-      import <path>  Import dictionary from JSON file
+    Usage:
+      \(name) <audio-file>          Transcribe audio file via running VoiceInk app
+      \(name) transcribe <file>     Same as above, explicit form
+      \(name) export <path>         Export dictionary to JSON file
+      \(name) import <path>         Import dictionary from JSON file
 
     Examples:
+      \(name) ~/Recordings/55.ogg
+      \(name) transcribe ./meeting.m4a
       \(name) export ~/dotfiles/voiceink/dictionary.json
       \(name) import ~/dotfiles/voiceink/dictionary.json
 
@@ -266,21 +421,33 @@ func printUsage() {
 }
 
 let args = CommandLine.arguments
-guard args.count == 3 else {
+guard args.count >= 2 else {
     printUsage()
     exit(1)
 }
 
-let command = args[1]
-let path = (args[2] as NSString).expandingTildeInPath
+let first = args[1]
 
-switch command {
-case "export":
-    exportDictionary(to: path)
-case "import":
-    importDictionary(from: path)
-default:
-    fputs("Unknown command: \(command)\n\n", stderr)
+switch first {
+case "-h", "--help", "help":
     printUsage()
-    exit(1)
+    exit(0)
+case "export":
+    guard args.count == 3 else { printUsage(); exit(1) }
+    exportDictionary(to: (args[2] as NSString).expandingTildeInPath)
+case "import":
+    guard args.count == 3 else { printUsage(); exit(1) }
+    importDictionary(from: (args[2] as NSString).expandingTildeInPath)
+case "transcribe":
+    guard args.count == 3 else { printUsage(); exit(1) }
+    transcribe(audioPath: args[2])
+default:
+    // Treat the first arg as an audio file path. This makes `voiceink ~/55.ogg` work.
+    if args.count == 2 {
+        transcribe(audioPath: first)
+    } else {
+        fputs("Unknown command: \(first)\n\n", stderr)
+        printUsage()
+        exit(1)
+    }
 }

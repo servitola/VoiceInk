@@ -170,6 +170,9 @@ struct VoiceInkApp: App {
 
         AppShortcuts.updateAppShortcutParameters()
 
+        // CLI bridge: lets the `voiceink <audio file>` shell command request transcription.
+        CLIBridgeService.shared.start(engine: engine, modelContext: container.mainContext)
+
         let migrationTask = SessionMetricMigrationService.shared.runIfNeeded(modelContainer: container)
         let mainContext = container.mainContext
         Task {
