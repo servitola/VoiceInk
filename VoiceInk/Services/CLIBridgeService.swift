@@ -84,6 +84,17 @@ final class CLIBridgeService {
             return .failure(.noModelSelected)
         }
 
+        // Keep the whisper model loaded in the shared provider so repeated CLI
+        // transcriptions reuse one context instead of reloading per request. This
+        // is essential for the CoreML encoder, whose per-load device compile is
+        // expensive: without it every request pays that cost and the GPU encoder
+        // is a net loss. The first request warms it once; the rest are fast.
+        if model.provider == .whisper,
+           let whisperFile = engine.whisperModelManager.availableModels.first(where: { $0.name == model.name }),
+           engine.whisperModelManager.whisperContext == nil {
+            try? await engine.whisperModelManager.loadModel(whisperFile)
+        }
+
         // The downstream WhisperTranscriptionService.readAudioSamples reads the
         // file as raw 16-bit PCM after a 44-byte WAV header; it does not decode
         // compressed formats. Preprocess every input through AudioProcessor so
