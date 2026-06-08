@@ -60,6 +60,10 @@ EOF
 cd build-apple/whisper.xcframework/macos-arm64_x86_64/whisper.framework
 ln -sf Versions/A/whisper whisper
 ln -sf Versions/A/Headers Headers
+# Modules and Resources must be reachable from the framework root, otherwise clang
+# cannot find module.modulemap and `import whisper` fails (canImport(whisper) == false).
+ln -sf Versions/Current/Modules Modules
+ln -sf Versions/Current/Resources Resources
 cd Versions
 ln -sf A Current
 
@@ -89,7 +93,8 @@ cat > A/Resources/Info.plist << 'EOF'
 </plist>
 EOF
 
-cd ../../../../
+# Back up to the whisper.xcframework directory (Versions -> framework -> slice -> xcframework).
+cd ../../../
 # Create XCFramework Info.plist
 cat > Info.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
