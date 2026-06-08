@@ -15,12 +15,13 @@ clang++ -dynamiclib \
     -arch arm64 -arch x86_64 \
     -mmacosx-version-min=13.3 \
     -Wl,-force_load,build-macos/src/libwhisper.a \
+    -Wl,-force_load,build-macos/src/libwhisper.coreml.a \
     -Wl,-force_load,build-macos/ggml/src/libggml.a \
     -Wl,-force_load,build-macos/ggml/src/libggml-base.a \
     -Wl,-force_load,build-macos/ggml/src/libggml-cpu.a \
     -Wl,-force_load,build-macos/ggml/src/ggml-metal/libggml-metal.a \
     -Wl,-force_load,build-macos/ggml/src/ggml-blas/libggml-blas.a \
-    -framework Accelerate -framework Metal -framework Foundation \
+    -framework Accelerate -framework Metal -framework Foundation -framework CoreML \
     -install_name "@rpath/whisper.framework/whisper" \
     -o build-apple/whisper.xcframework/macos-arm64_x86_64/whisper.framework/Versions/A/whisper
 
