@@ -7,7 +7,7 @@ enum TranscriptionModelRegistry {
     }
     
     private static let predefinedModels: [any TranscriptionModel] = {
-        let nonCloudModels: [any TranscriptionModel] = [
+        var nonCloudModels: [any TranscriptionModel] = [
             // Native Apple Model
             NativeAppleModel(
                 name: "apple-speech",
@@ -16,32 +16,6 @@ enum TranscriptionModelRegistry {
                 isMultilingualModel: true,
                 supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .nativeApple)
             ),
-
-            // Parakeet Models (Apple Neural Engine only — unavailable on Intel Macs)
-            #if canImport(FluidAudio)
-            FluidAudioModel(
-                name: "parakeet-tdt-0.6b-v2",
-                displayName: "Parakeet V2",
-                description: "NVIDIA's Parakeet V2 model optimized for lightning-fast English-only transcription",
-                size: "474 MB",
-                speed: 0.99,
-                accuracy: 0.94,
-                ramUsage: 0.8,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
-            ),
-            FluidAudioModel(
-                name: "parakeet-tdt-0.6b-v3",
-                displayName: "Parakeet V3",
-                description: "Parakeet V3 with English and 25 European language support",
-                size: "494 MB",
-                speed: 0.99,
-                accuracy: 0.94,
-                ramUsage: 0.8,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .fluidAudio)
-            ),
-            #endif
 
             // Local Models
             WhisperModel(
@@ -125,6 +99,37 @@ enum TranscriptionModelRegistry {
                 ramUsage: 1.0
             )
         ]
+
+        // Parakeet Models (FluidAudio) run on the Apple Neural Engine and are unavailable
+        // on Intel Macs, so they are only listed when the FluidAudio package is linked.
+        #if canImport(FluidAudio)
+        let parakeetModels: [any TranscriptionModel] = [
+            FluidAudioModel(
+                name: "parakeet-tdt-0.6b-v2",
+                displayName: "Parakeet V2",
+                description: "NVIDIA's Parakeet V2 model optimized for lightning-fast English-only transcription",
+                size: "474 MB",
+                speed: 0.99,
+                accuracy: 0.94,
+                ramUsage: 0.8,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
+            ),
+            FluidAudioModel(
+                name: "parakeet-tdt-0.6b-v3",
+                displayName: "Parakeet V3",
+                description: "Parakeet V3 with English and 25 European language support",
+                size: "494 MB",
+                speed: 0.99,
+                accuracy: 0.94,
+                ramUsage: 0.8,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .fluidAudio)
+            ),
+        ]
+        // Keep original ordering: Parakeet models appear right after the Native Apple model.
+        nonCloudModels.insert(contentsOf: parakeetModels, at: 1)
+        #endif
 
         let cloudModels: [any TranscriptionModel] = CloudProviderRegistry.allProviders.flatMap { $0.models }
         return nonCloudModels + cloudModels
