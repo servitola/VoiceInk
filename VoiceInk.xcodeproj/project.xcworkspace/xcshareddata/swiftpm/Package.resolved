@@ -11,15 +11,6 @@
       }
     },
     {
-      "identity" : "fluidaudio",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/FluidInference/FluidAudio.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "e332c18b49af64aa9ccae20af7a02d91cef444e5"
-      }
-    },
-    {
       "identity" : "keyboardshortcuts",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sindresorhus/KeyboardShortcuts",

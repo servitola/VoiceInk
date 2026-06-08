@@ -1,13 +1,16 @@
 import Foundation
-import FluidAudio
 import AppKit
 import os
+#if canImport(FluidAudio)
+import FluidAudio
+#endif
 
 struct FluidAudioDownloadStatus {
     let fractionCompleted: Double
     let message: String
 }
 
+#if canImport(FluidAudio)
 @MainActor
 class FluidAudioModelManager: ObservableObject {
     @Published private var downloadStatuses: [String: FluidAudioDownloadStatus] = [:]
@@ -158,3 +161,29 @@ class FluidAudioModelManager: ObservableObject {
         modelName.replacingOccurrences(of: ".mlmodelc", with: "")
     }
 }
+
+#else
+
+// Intel (x86_64) stub. FluidAudio/Parakeet models run on the Apple Neural Engine and are
+// not available on Intel Macs, so the dependency is not linked there. This stub keeps the
+// type and its public API available so the model-management UI compiles; on Intel no
+// Parakeet model is ever reported as downloaded and downloads are no-ops.
+@MainActor
+class FluidAudioModelManager: ObservableObject {
+    @Published private var downloadStatuses: [String: FluidAudioDownloadStatus] = [:]
+
+    var onModelDeleted: ((String) -> Void)?
+    var onModelsChanged: (() -> Void)?
+
+    init() {}
+
+    func isFluidAudioModelDownloaded(named modelName: String) -> Bool { false }
+    func isFluidAudioModelDownloaded(_ model: FluidAudioModel) -> Bool { false }
+    func isFluidAudioModelDownloading(_ model: FluidAudioModel) -> Bool { false }
+    func downloadStatus(for model: FluidAudioModel) -> FluidAudioDownloadStatus? { nil }
+    func downloadFluidAudioModel(_ model: FluidAudioModel) async {}
+    func deleteFluidAudioModel(_ model: FluidAudioModel) { onModelDeleted?(model.name) }
+    func showFluidAudioModelInFinder(_ model: FluidAudioModel) {}
+}
+
+#endif

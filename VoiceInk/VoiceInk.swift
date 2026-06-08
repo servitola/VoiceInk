@@ -4,7 +4,9 @@ import Sparkle
 import AppKit
 import OSLog
 import AppIntents
+#if canImport(FluidAudio)
 import FluidAudio
+#endif
 
 @main
 struct VoiceInkApp: App {

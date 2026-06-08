@@ -1,8 +1,10 @@
 import Foundation
 import CoreML
 import AVFoundation
-import FluidAudio
 import os.log
+
+#if canImport(FluidAudio)
+import FluidAudio
 
 class FluidAudioTranscriptionService: TranscriptionService {
     private var asrManager: AsrManager?
@@ -155,3 +157,30 @@ class FluidAudioTranscriptionService: TranscriptionService {
     }
 
 }
+
+#else
+
+// Intel (x86_64) stub. FluidAudio/Parakeet relies on the Apple Neural Engine and the
+// Float16 type, neither of which is available on Intel Macs, so the dependency is not
+// linked there. This stub keeps the type available so the rest of the app compiles;
+// any attempt to use a Parakeet model on Intel throws a clear error.
+enum FluidAudioUnavailableError: LocalizedError {
+    case notSupportedOnIntel
+    var errorDescription: String? {
+        "Parakeet (FluidAudio) is not supported on Intel Macs. Use a Whisper model instead."
+    }
+}
+
+class FluidAudioTranscriptionService: TranscriptionService {
+    func transcribe(audioURL: URL, model: any TranscriptionModel) async throws -> String {
+        throw FluidAudioUnavailableError.notSupportedOnIntel
+    }
+
+    func loadModel(for model: FluidAudioModel) async throws {
+        throw FluidAudioUnavailableError.notSupportedOnIntel
+    }
+
+    func cleanup() async {}
+}
+
+#endif

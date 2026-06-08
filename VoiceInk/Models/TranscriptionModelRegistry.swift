@@ -17,7 +17,8 @@ enum TranscriptionModelRegistry {
                 supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .nativeApple)
             ),
 
-            // Parakeet Models
+            // Parakeet Models (Apple Neural Engine only — unavailable on Intel Macs)
+            #if canImport(FluidAudio)
             FluidAudioModel(
                 name: "parakeet-tdt-0.6b-v2",
                 displayName: "Parakeet V2",
@@ -40,6 +41,7 @@ enum TranscriptionModelRegistry {
                 supportsStreaming: true,
                 supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .fluidAudio)
             ),
+            #endif
 
             // Local Models
             WhisperModel(
