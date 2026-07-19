@@ -112,6 +112,8 @@ class TranscriptionPipeline {
                 )
             }
             text = TranscriptionOutputFilter.filter(text)
+            text = TranscriptionOutputFilter.removeWakeWord(from: text)
+            logger.notice("📝 After wake word removal: \(text, privacy: .public)")
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
 
             if shouldCancel() {
