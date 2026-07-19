@@ -254,6 +254,9 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
         hideRecorderPanel()
         isRecorderPanelVisible = false
         engine.assistantSession.reset()
+
+        // Resume wake word listening if enabled
+        await engine.resumeWakeWordListeningIfEnabled()
     }
 
     func resetOnLaunch() async {
