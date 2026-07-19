@@ -13,6 +13,15 @@ final class WordReplacementService {
         let dateAdded: Date
     }
 
+    /// Store-independent description of one rule, so the matching engine can be
+    /// driven either from SwiftData or from plain values in tests.
+    private struct RuleSource {
+        let originalText: String
+        let replacementText: String
+        let dateAdded: Date
+        let order: Int
+    }
+
     private struct PreparedRule {
         let original: String
         let replacement: String
@@ -50,13 +59,34 @@ final class WordReplacementService {
             "Starting word replacement with \(replacements.count, privacy: .public) enabled rule(s)"
         )
 
-        var modifiedText = text
-
         let rules = preparedRules(from: replacements)
 
         logger.debug(
             "Prepared \(rules.count, privacy: .public) replacement variant(s)"
         )
+
+        return apply(rules, to: text)
+    }
+
+    /// Pure transform over plain rules: no store access and no caching, so the
+    /// Unicode boundary behaviour can be exercised directly from tests.
+    func applyReplacements(to text: String, rules: [(original: String, replacement: String)]) -> String {
+        guard !rules.isEmpty else { return text }
+
+        let sources = rules.enumerated().map { entry in
+            RuleSource(
+                originalText: entry.element.original,
+                replacementText: entry.element.replacement,
+                dateAdded: .distantPast,
+                order: entry.offset
+            )
+        }
+
+        return apply(buildRules(from: sources), to: text)
+    }
+
+    private func apply(_ rules: [PreparedRule], to text: String) -> String {
+        var modifiedText = text
 
         var matchedRuleCount = 0
         for rule in rules {
@@ -79,6 +109,7 @@ final class WordReplacementService {
                 )
                 matchedRuleCount += 1
             } else {
+                // Fallback substring replace for non-spaced scripts
                 let replacedText = modifiedText.replacingOccurrences(
                     of: original, with: replacementText, options: .caseInsensitive)
                 guard replacedText != modifiedText else { continue }
@@ -114,18 +145,39 @@ final class WordReplacementService {
             return cachedRules
         }
 
-        let sortedRules = records
-            .flatMap { record in
-                WordReplacementVariants.parse(record.originalText).map {
+        // Records are already ordered by id, so the positional tie-break below
+        // matches the previous id-based one.
+        let sources = records.enumerated().map { entry in
+            RuleSource(
+                originalText: entry.element.originalText,
+                replacementText: entry.element.replacementText,
+                dateAdded: entry.element.dateAdded,
+                order: entry.offset
+            )
+        }
+
+        let prepared = buildRules(from: sources)
+
+        cachedRecords = records
+        cachedRules = prepared
+        logger.debug("Rebuilt cached word replacement plan with \(prepared.count, privacy: .public) rule(s)")
+        return prepared
+    }
+
+    private func buildRules(from sources: [RuleSource]) -> [PreparedRule] {
+        let sortedRules = sources
+            .flatMap { source in
+                WordReplacementVariants.parse(source.originalText).map {
                     (
                         original: $0,
-                        replacement: record.replacementText,
-                        dateAdded: record.dateAdded,
-                        id: record.id.uuidString
+                        replacement: source.replacementText,
+                        dateAdded: source.dateAdded,
+                        order: source.order
                     )
                 }
             }
             .sorted {
+                // Longest-first so specific triggers match before shorter overlapping ones
                 if $0.original.count != $1.original.count {
                     return $0.original.count > $1.original.count
                 }
@@ -137,20 +189,24 @@ final class WordReplacementService {
                 if $0.dateAdded != $1.dateAdded {
                     return $0.dateAdded < $1.dateAdded
                 }
-                return $0.id < $1.id
+                return $0.order < $1.order
             }
 
         // Preserve every legacy rule. New dictionary mutations prevent source
         // conflicts, but older stores may contain multiple rules for a trigger.
-        let prepared = sortedRules.compactMap { rule -> PreparedRule? in
+        return sortedRules.compactMap { rule -> PreparedRule? in
             guard usesWordBoundaries(for: rule.original) else {
                 return PreparedRule(original: rule.original, replacement: rule.replacement, regex: nil)
             }
 
-            // Unicode-aware lookarounds treat punctuation as a boundary while
-            // preventing matches inside larger words.
+            // Unicode-aware lookarounds instead of \b, so punctuation acts as a
+            // word boundary while triggers can't match inside larger words like
+            // "vergrößern"; non-spaced scripts are exempt so Latin triggers
+            // flush against CJK/Thai still match (mirrors usesWordBoundaries).
             do {
                 let escaped = NSRegularExpression.escapedPattern(for: rule.original)
+                // scx (Script_Extensions) so shared marks like the prolonged sound mark
+                // U+30FC (Script=Common, scx=Hira Kana) stay exempt too.
                 let wordChar = "[[\\p{L}\\p{M}\\p{N}]-[\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Hangul}\\p{scx=Thai}]]"
                 let pattern = "(?<!\(wordChar))\(escaped)(?!\(wordChar))"
                 let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
@@ -162,11 +218,6 @@ final class WordReplacementService {
                 return nil
             }
         }
-
-        cachedRecords = records
-        cachedRules = prepared
-        logger.debug("Rebuilt cached word replacement plan with \(prepared.count, privacy: .public) rule(s)")
-        return prepared
     }
 
     private func usesWordBoundaries(for text: String) -> Bool {
