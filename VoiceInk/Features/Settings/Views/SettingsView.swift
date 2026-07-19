@@ -16,6 +16,7 @@ struct SettingsView: View {
     @ObservedObject private var playbackController = PlaybackController.shared
     @AppStorage(OnboardingSettings.completedV2Key) private var hasCompletedOnboardingV2 = true
     @AppStorage("enableAnnouncements") private var enableAnnouncements = true
+    @AppStorage("ShowMenuBarIcon") private var showMenuBarIcon = true
     @AppStorage("restoreClipboardAfterPaste") private var restoreClipboardAfterPaste = true
     @AppStorage("clipboardRestoreDelay") private var clipboardRestoreDelay = 2.0
     @AppStorage(SmartPunctuation.settingsKey) private var smartPunctuationEnabled = false
@@ -32,6 +33,7 @@ struct SettingsView: View {
     @State private var isImportingSettings = false
 
     @State private var isRestoreClipboardExpanded = false
+    @State private var showWakeWordSettings = false
 
     var body: some View {
         Form {
@@ -237,8 +239,23 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Wake Word") {
+                Button("Configure Wake Word…") {
+                    showWakeWordSettings = true
+                }
+            }
+
             Section("General") {
                 Toggle("Hide Dock Icon", isOn: $menuBarManager.isMenuBarOnly)
+
+                Toggle(isOn: $showMenuBarIcon) {
+                    HStack(spacing: 4) {
+                        Text("Show Menu Bar Icon")
+                        if !showMenuBarIcon && menuBarManager.isMenuBarOnly {
+                            InfoTip("With both the Dock and menu bar icons hidden, reopen VoiceInk from Finder or Spotlight to bring the window back.")
+                        }
+                    }
+                }
 
                 Toggle(
                     String(localized: "Launch at Login"),
@@ -341,6 +358,17 @@ struct SettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Your language change will take full effect after you quit and reopen VoiceInk.")
+        }
+        .sheet(isPresented: $showWakeWordSettings) {
+            NavigationStack {
+                WakeWordSettingsView()
+                    .frame(minWidth: 480, minHeight: 600)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showWakeWordSettings = false }
+                        }
+                    }
+            }
         }
     }
 
