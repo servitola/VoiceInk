@@ -20,6 +20,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "🧭 Dock/app reopen requested. hasVisibleWindowsFlag=\(flag, privacy: .public); isMenuBarOnly=\(self.menuBarManager?.isMenuBarOnly ?? UserDefaults.standard.bool(forKey: "IsMenuBarOnly"), privacy: .public); activationPolicy=\(WindowDiagnostics.activationPolicyDescription(sender.activationPolicy()), privacy: .public); snapshot=\(WindowDiagnostics.windowSnapshot(), privacy: .public)"
         )
 
+        if let menuBarManager, menuBarManager.isMenuBarOnly {
+            // Recovery path: when both the Dock and the menu bar icon are hidden, the user
+            // has no UI affordance left, so a reopen from Finder/Spotlight must bring the
+            // window back — even in menu-bar-only mode (focusMainWindow restores .regular).
+            let menuBarIconHidden = !UserDefaults.standard.bool(forKey: "ShowMenuBarIcon")
+            if menuBarIconHidden {
+                menuBarManager.focusMainWindow()
+                logger.notice("🧭 Dock/app reopen recovered the main window in menu-bar-only mode.")
+                return false
+            }
+        }
+
         if let menuBarManager, !menuBarManager.isMenuBarOnly {
             if WindowManager.shared.currentMainWindow() != nil {
                 WindowManager.shared.showMainWindow()

@@ -19,6 +19,7 @@ struct MenuBarView: View {
     @ObservedObject private var modeManager = ModeManager.shared
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
+    @AppStorage("ShowMenuBarIcon") private var showMenuBarIcon = true
     @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
 
     var body: some View {
@@ -142,6 +143,15 @@ struct MenuBarView: View {
                 }
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
+
+            Button("Hide Menu Bar Icon") {
+                // If the Dock icon is also hidden the user would have no UI left,
+                // so surface the window first to guarantee a way back.
+                if menuBarManager.isMenuBarOnly {
+                    menuBarManager.focusMainWindow()
+                }
+                showMenuBarIcon = false
+            }
 
             Toggle("Launch at Login", isOn: $launchAtLoginEnabled)
                 .onChange(of: launchAtLoginEnabled) { oldValue, newValue in

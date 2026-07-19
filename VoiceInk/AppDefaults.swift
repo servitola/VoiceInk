@@ -50,6 +50,7 @@ enum AppDefaults {
 
             // UI & Behavior
             "IsMenuBarOnly": false,
+            "ShowMenuBarIcon": true,
             AppAppearancePreference.userDefaultsKey: AppAppearancePreference.system.rawValue,
             AppLanguagePreference.userDefaultsKey: AppLanguagePreference.systemValue,
             // Shortcuts
