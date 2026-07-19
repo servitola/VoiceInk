@@ -15,7 +15,9 @@ class TranscriptionServiceRegistry {
         modelProvider: modelProvider
     )
     private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
+    #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled - requires macOS 26 APIs
     private(set) lazy var nativeAppleTranscriptionService = NativeAppleTranscriptionService()
+    #endif
     private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
     private var cachedTranscribeCppTranscriptionService: TranscribeCppTranscriptionService?
 
@@ -43,7 +45,12 @@ class TranscriptionServiceRegistry {
         case .transcribeCpp:
             return transcribeCppTranscriptionService
         case .nativeApple:
+            #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled
             return nativeAppleTranscriptionService
+            #else
+            logger.warning("Native Apple transcription requested but not available (requires macOS 26 APIs). Falling back to cloud transcription.")
+            return cloudTranscriptionService
+            #endif
         default:
             return cloudTranscriptionService
         }

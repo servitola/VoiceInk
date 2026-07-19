@@ -1,0 +1,4 @@
+module whisper {
+    umbrella header "whisper_umbrella.h"
+    export *
+}
