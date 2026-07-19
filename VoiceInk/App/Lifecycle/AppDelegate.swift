@@ -10,6 +10,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let menuBarManager, menuBarManager.isMenuBarOnly,
+           !UserDefaults.standard.bool(forKey: "ShowMenuBarIcon") {
+            menuBarManager.focusMainWindow()
+            return false
+        }
+
         if let menuBarManager, !menuBarManager.isMenuBarOnly {
             if WindowManager.shared.currentMainWindow() != nil {
                 WindowManager.shared.showMainWindow()
@@ -28,7 +34,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
-    // Stash URL when app cold-starts to avoid spawning a new window/tab
     var pendingOpenFileURL: URL?
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -43,13 +48,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if WindowManager.shared.currentMainWindow() == nil {
-            // Cold start: do NOT create a window here to avoid extra window/tab.
-            // Defer to SwiftUI's main window scene and let ContentView process this later.
             pendingOpenFileURL = url
             WindowManager.shared.prepareForUserRequestedMainWindow()
             NotificationCenter.default.post(name: .showMainWindowRequested, object: nil)
         } else {
-            // Running: focus current window and route in-place to Transcribe Audio
             WindowManager.shared.showMainWindow()
             NotificationCenter.default.post(
                 name: .navigateToDestination, object: nil, userInfo: ["destination": "Transcribe Audio"])
