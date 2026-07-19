@@ -80,6 +80,19 @@ class MenuBarManager: ObservableObject {
         }
     }
 
+    /// Force the main window back to the foreground, switching to a regular
+    /// activation policy if needed. Recovery path for when both the Dock and menu
+    /// bar icons are hidden and the user has no other affordance to reach the app.
+    func focusMainWindow() {
+        activateForPresentedWindow()
+        if WindowManager.shared.currentMainWindow() != nil {
+            WindowManager.shared.showMainWindow()
+        } else {
+            WindowManager.shared.prepareForUserRequestedMainWindow()
+            NotificationCenter.default.post(name: .showMainWindowRequested, object: nil)
+        }
+    }
+
     func openQuickHistory() {
         guard let engine else { return }
 
