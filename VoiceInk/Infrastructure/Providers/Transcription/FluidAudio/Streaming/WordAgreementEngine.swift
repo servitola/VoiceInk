@@ -1,3 +1,4 @@
+#if canImport(FluidAudio)
 import FluidAudio
 import Foundation
 
@@ -282,3 +283,4 @@ final class WordAgreementEngine {
         )
     }
 }
+#endif
