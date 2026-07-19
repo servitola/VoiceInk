@@ -8,23 +8,39 @@ enum LanguageDisplayMode {
 
 struct LanguageSelectionView: View {
     @ObservedObject var transcriptionModelManager: TranscriptionModelManager
-    @AppStorage("SelectedLanguage") private var selectedLanguage: String = "en"
+    @State private var selectedLanguages: [String] = UserDefaults.standard.selectedLanguages
     // Add display mode parameter with full as the default
     var displayMode: LanguageDisplayMode = .full
     @ObservedObject var whisperPrompt: WhisperPrompt
 
-    private func updateLanguage(_ language: String) {
-        guard selectedLanguage != language else { return }
+    private func updateLanguages(_ languages: [String]) {
+        let normalized = languages.isEmpty ? ["en"] : languages
+        guard normalized != selectedLanguages else { return }
 
-        // Update UI state - the UserDefaults updating is now automatic with @AppStorage
-        selectedLanguage = language
+        selectedLanguages = normalized
 
-        // Force the prompt to update for the new language
+        // Save to UserDefaults
+        UserDefaults.standard.selectedLanguages = selectedLanguages
+
+        // Force the prompt to update for the new languages
         whisperPrompt.updateTranscriptionPrompt()
 
         // Post notification for language change
         NotificationCenter.default.post(name: .languageDidChange, object: nil)
         NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
+    }
+
+    private func toggleLanguage(_ languageCode: String) {
+        var newLanguages = selectedLanguages
+        if let index = newLanguages.firstIndex(of: languageCode) {
+            // Don't allow deselecting if it's the only language
+            if newLanguages.count > 1 {
+                newLanguages.remove(at: index)
+            }
+        } else {
+            newLanguages.append(languageCode)
+        }
+        updateLanguages(newLanguages)
     }
 
     // Function to check if current model is multilingual
@@ -55,24 +71,33 @@ struct LanguageSelectionView: View {
 
     private func useCompatibleLanguageForCurrentModel() {
         guard let currentModel = transcriptionModelManager.currentTranscriptionModel else { return }
-        updateLanguage(TranscriptionLanguageSupport.validLanguageOrFallback(selectedLanguage, for: currentModel))
+        let available = TranscriptionLanguageSupport.languages(for: currentModel)
+        let kept = selectedLanguages.filter { available.keys.contains($0) }
+        if kept.isEmpty {
+            updateLanguages([TranscriptionLanguageSupport.validLanguageOrFallback(selectedLanguages.first ?? "en", for: currentModel)])
+        } else if kept != selectedLanguages {
+            updateLanguages(kept)
+        }
     }
 
-    // Get the display name of the current language
-    private func currentLanguageDisplayName() -> String {
-        return availableLanguagesForCurrentModel()[selectedLanguage] ?? "Unknown"
-    }
-
-    private var selectedLanguageBinding: Binding<String> {
-        Binding(
-            get: { selectedLanguage },
-            set: { updateLanguage($0) }
-        )
+    // Get the display name of the current languages
+    private func currentLanguagesDisplayName() -> String {
+        let languages = availableLanguagesForCurrentModel()
+        let names = selectedLanguages.compactMap { languages[$0] }
+        if names.isEmpty {
+            return "Unknown"
+        } else if names.count == 1 {
+            return names[0]
+        } else if names.count == 2 {
+            return names.joined(separator: " + ")
+        } else {
+            return "\(names.count) languages"
+        }
     }
 
     private var nativeAppleAssetControl: some View {
         NativeAppleLanguageAssetControl(
-            localeIdentifier: selectedLanguage,
+            localeIdentifier: selectedLanguages.first ?? "en",
             isVisible: true
         )
         .layoutPriority(1)
@@ -123,9 +148,17 @@ struct LanguageSelectionView: View {
                     }
                     .disabled(true)
                 } else if isMultilingualModel() {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Picker("Select Language", selection: selectedLanguageBinding) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Select Languages")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+
+                        if isNativeAppleModelSelected() {
+                            nativeAppleAssetControl
+                        }
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
                                 ForEach(
                                     availableLanguagesForCurrentModel().sorted(by: {
                                         if $0.key == "auto" { return true }
@@ -133,19 +166,25 @@ struct LanguageSelectionView: View {
                                         return $0.value < $1.value
                                     }), id: \.key
                                 ) { key, value in
-                                    Text(value).tag(key)
+                                    Toggle(isOn: Binding(
+                                        get: { selectedLanguages.contains(key) },
+                                        set: { _ in toggleLanguage(key) }
+                                    )) {
+                                        Text(value)
+                                            .font(.body)
+                                    }
+                                    .toggleStyle(.checkbox)
                                 }
                             }
-                            .pickerStyle(MenuPickerStyle())
-                            .frame(maxWidth: isNativeAppleModelSelected() ? 280 : .infinity, alignment: .leading)
-
-                            if isNativeAppleModelSelected() {
-                                nativeAppleAssetControl
-                            }
                         }
+                        .frame(maxHeight: 300)
+
+                        Text("Selected: \(currentLanguagesDisplayName())")
+                            .font(.caption)
+                            .foregroundColor(.blue)
 
                         Text(
-                            "This model supports multiple languages. Select a specific language or auto-detect(if available)"
+                            "This model supports multiple languages. Select one or more languages for transcription."
                         )
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -165,7 +204,7 @@ struct LanguageSelectionView: View {
                     }
                     .onAppear {
                         // Ensure English is set when viewing English-only model
-                        updateLanguage("en")
+                        updateLanguages(["en"])
                     }
                 }
             } else {
@@ -202,11 +241,11 @@ struct LanguageSelectionView: View {
                             }), id: \.key
                         ) { key, value in
                             Button {
-                                updateLanguage(key)
+                                toggleLanguage(key)
                             } label: {
                                 HStack {
                                     Text(value)
-                                    if selectedLanguage == key {
+                                    if selectedLanguages.contains(key) {
                                         Image(systemName: "checkmark")
                                     }
                                 }
@@ -214,7 +253,7 @@ struct LanguageSelectionView: View {
                         }
                     } label: {
                         HStack {
-                            Text(String(format: String(localized: "Language: %@"), currentLanguageDisplayName()))
+                            Text(String(format: String(localized: "Languages: %@"), currentLanguagesDisplayName()))
                             Image(systemName: "chevron.up.chevron.down")
                                 .font(.system(size: 10))
                         }
@@ -235,7 +274,7 @@ struct LanguageSelectionView: View {
                 .disabled(true)
                 .onAppear {
                     // Ensure English is set for English-only models
-                    updateLanguage("en")
+                    updateLanguages(["en"])
                 }
             }
         }
