@@ -15,20 +15,19 @@ class WordReplacementService {
             return text  // No replacements to apply
         }
 
+        let rules = replacements.map { (original: $0.originalText, replacement: $0.replacementText) }
+        return applyReplacements(to: text, rules: rules)
+    }
+
+    func applyReplacements(to text: String, rules: [(original: String, replacement: String)]) -> String {
+        guard !rules.isEmpty else { return text }
+
         var modifiedText = text
+        let sortedRules = rules.sorted { $0.original.count > $1.original.count }
 
-        // Longest-first so specific triggers match before shorter overlapping ones
-        let sortedReplacements = replacements.sorted {
-            $0.originalText.count > $1.originalText.count
-        }
-
-        // Apply replacements (case-insensitive)
-        for replacement in sortedReplacements {
-            let originalGroup = replacement.originalText
-            let replacementText = replacement.replacementText
-
+        for rule in sortedRules {
             let variants =
-                originalGroup
+                rule.original
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
@@ -53,13 +52,13 @@ class WordReplacementService {
                             in: modifiedText,
                             options: [],
                             range: range,
-                            withTemplate: replacementText
+                            withTemplate: rule.replacement
                         )
                     }
                 } else {
                     // Fallback substring replace for non-spaced scripts
                     modifiedText = modifiedText.replacingOccurrences(
-                        of: original, with: replacementText, options: .caseInsensitive)
+                        of: original, with: rule.replacement, options: .caseInsensitive)
                 }
             }
         }
