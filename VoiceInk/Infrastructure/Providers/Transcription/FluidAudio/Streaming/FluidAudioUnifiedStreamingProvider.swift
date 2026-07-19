@@ -1,3 +1,4 @@
+#if canImport(FluidAudio)
 import FluidAudio
 import Foundation
 import os
@@ -67,3 +68,4 @@ final class FluidAudioUnifiedStreamingProvider: StreamingTranscriptionProvider {
         logger.notice("Parakeet Unified streaming disconnected")
     }
 }
+#endif
