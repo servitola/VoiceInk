@@ -1,7 +1,9 @@
 import AppKit
-import FluidAudio
 import Foundation
 import os
+#if canImport(FluidAudio)
+import FluidAudio
+#endif
 
 struct FluidAudioDownloadStatus {
     let fractionCompleted: Double
@@ -14,6 +16,8 @@ struct FluidAudioDownloadStatus {
         self.isIndeterminate = isIndeterminate
     }
 }
+
+#if canImport(FluidAudio)
 
 @MainActor
 class FluidAudioModelManager: ObservableObject {
@@ -472,3 +476,43 @@ class FluidAudioModelManager: ObservableObject {
         modelName.replacingOccurrences(of: ".mlmodelc", with: "")
     }
 }
+
+#else
+
+// Intel (x86_64) stub. FluidAudio/Parakeet models run on the Apple Neural Engine and rely on
+// the Float16 type, neither of which is available on Intel Macs, so the dependency is not linked
+// there. This stub keeps the type and its public API available so the model-management UI and the
+// realtime-support helpers compile; on Intel no Parakeet model is ever reported as downloaded and
+// downloads are no-ops. The static name-classification helpers below use pure-Swift string checks
+// that mirror the real implementation, so realtime routing stays correct.
+@MainActor
+class FluidAudioModelManager: ObservableObject {
+    @Published private var downloadStatuses: [String: FluidAudioDownloadStatus] = [:]
+
+    var onModelDeleted: ((String) -> Void)?
+    var onModelsChanged: (() -> Void)?
+
+    init() {}
+
+    nonisolated static func isParakeetUnifiedModel(named modelName: String) -> Bool {
+        modelName == "parakeet-unified-0.6b"
+    }
+
+    nonisolated static func isNemotronModel(named modelName: String) -> Bool {
+        modelName == "nemotron-latin-0.6b" || modelName == "nemotron-multilingual-0.6b"
+    }
+
+    nonisolated static func requiresRealtime(named modelName: String) -> Bool {
+        isNemotronModel(named: modelName)
+    }
+
+    func isFluidAudioModelDownloaded(named modelName: String) -> Bool { false }
+    func isFluidAudioModelDownloaded(_ model: FluidAudioModel) -> Bool { false }
+    func isFluidAudioModelDownloading(_ model: FluidAudioModel) -> Bool { false }
+    func downloadStatus(for model: FluidAudioModel) -> FluidAudioDownloadStatus? { nil }
+    func downloadFluidAudioModel(_ model: FluidAudioModel) async {}
+    func deleteFluidAudioModel(_ model: FluidAudioModel) { onModelDeleted?(model.name) }
+    func showFluidAudioModelInFinder(_ model: FluidAudioModel) {}
+}
+
+#endif
