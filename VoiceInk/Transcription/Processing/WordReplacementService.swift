@@ -15,45 +15,44 @@ class WordReplacementService {
             return text  // No replacements to apply
         }
 
+        let rules = replacements.map { (original: $0.originalText, replacement: $0.replacementText) }
+        return applyReplacements(to: text, rules: rules)
+    }
+
+    /// Pure string transform, exposed for testing without SwiftData.
+    func applyReplacements(to text: String, rules: [(original: String, replacement: String)]) -> String {
+        guard !rules.isEmpty else { return text }
+
         var modifiedText = text
 
         // Longest-first so specific triggers match before shorter overlapping ones
-        let sortedReplacements = replacements.sorted {
-            $0.originalText.count > $1.originalText.count
-        }
+        let sortedRules = rules.sorted { $0.original.count > $1.original.count }
 
-        // Apply replacements (case-insensitive)
-        for replacement in sortedReplacements {
-            let originalGroup = replacement.originalText
-            let replacementText = replacement.replacementText
-
-            let variants =
-                originalGroup
+        for rule in sortedRules {
+            let variants = rule.original
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .sorted { $0.count > $1.count }
 
             for original in variants {
-                let usesBoundaries = usesWordBoundaries(for: original)
-
-                if usesBoundaries {
-                    // Lookarounds instead of \b so punctuation acts as a word boundary
+                if usesWordBoundaries(for: original) {
+                    // Unicode-aware boundary: any letter/digit/underscore in any script counts
+                    // as a word char, so "клод" won't match inside "клодеы".
                     let escaped = NSRegularExpression.escapedPattern(for: original)
-                    let pattern = "(?<![a-zA-Z0-9])\(escaped)(?![a-zA-Z0-9])"
+                    let pattern = "(?<![\\p{L}\\p{N}_])\(escaped)(?![\\p{L}\\p{N}_])"
                     if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
                         let range = NSRange(modifiedText.startIndex..., in: modifiedText)
                         modifiedText = regex.stringByReplacingMatches(
                             in: modifiedText,
                             options: [],
                             range: range,
-                            withTemplate: replacementText
+                            withTemplate: rule.replacement
                         )
                     }
                 } else {
                     // Fallback substring replace for non-spaced scripts
-                    modifiedText = modifiedText.replacingOccurrences(
-                        of: original, with: replacementText, options: .caseInsensitive)
+                    modifiedText = modifiedText.replacingOccurrences(of: original, with: rule.replacement, options: .caseInsensitive)
                 }
             }
         }
