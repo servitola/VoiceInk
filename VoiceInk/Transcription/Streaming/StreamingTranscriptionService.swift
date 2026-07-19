@@ -273,6 +273,7 @@ class StreamingTranscriptionService {
     // MARK: - Private
 
     private func createProvider(for model: any TranscriptionModel) -> StreamingTranscriptionProvider {
+        #if canImport(FluidAudio)
         if model.provider == .fluidAudio {
             if FluidAudioModelManager.isNemotronModel(named: model.name) {
                 return FluidAudioNemotronStreamingProvider()
@@ -289,6 +290,7 @@ class StreamingTranscriptionService {
             }
             return FluidAudioStreamingProvider(fluidAudioService: fluidAudioService)
         }
+        #endif
         guard let cloudProvider = CloudProviderRegistry.provider(for: model.provider),
             let streamingProvider = cloudProvider.makeStreamingProvider(modelContext: modelContext)
         else {

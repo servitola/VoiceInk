@@ -1,3 +1,4 @@
+#if canImport(FluidAudio)
 import FluidAudio
 import Foundation
 import os
@@ -269,3 +270,4 @@ final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
     }
 
 }
+#endif

@@ -1,3 +1,4 @@
+#if canImport(FluidAudio)
 import FluidAudio
 import Foundation
 import os
@@ -70,3 +71,4 @@ final class FluidAudioNemotronStreamingProvider: StreamingTranscriptionProvider 
         logger.notice("Nemotron streaming disconnected")
     }
 }
+#endif

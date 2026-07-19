@@ -32,6 +32,12 @@ playground.xcworkspace
 .build/
 build/
 .local-build/
+.local-build-test/
+.local-build-x86/
+
+# Transient backups made by scripts/arch-xcodebuild.sh while stripping
+# FluidAudio for Intel builds (always restored after the build).
+*.fa-bak
 
 # CocoaPods
 #
@@ -99,4 +105,13 @@ Icon
 .AppleDesktop
 Network Trash Folder
 Temporary Items
-.apdisk 
+.apdisk
+.claude/settings.local.json
+
+# Xcode project backup artifacts
+*.pbxproj.backup
+*.backup
+
+# Build artifacts (not source)
+*.profraw
+VoiceInkCLI/voiceink
