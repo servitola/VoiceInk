@@ -16,6 +16,7 @@ struct MenuBarView: View {
     @ObservedObject private var modeManager = ModeManager.shared
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
+    @AppStorage("ShowMenuBarIcon") private var showMenuBarIcon = true
 
     var body: some View {
         VStack {
@@ -138,6 +139,13 @@ struct MenuBarView: View {
                 }
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
+
+            Button("Hide Menu Bar Icon") {
+                if menuBarManager.isMenuBarOnly {
+                    menuBarManager.focusMainWindow()
+                }
+                showMenuBarIcon = false
+            }
 
             Toggle(
                 "Launch at Login",
