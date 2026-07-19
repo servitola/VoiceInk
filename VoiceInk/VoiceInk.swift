@@ -1,6 +1,8 @@
 import AppIntents
 import AppKit
+#if canImport(FluidAudio)
 import FluidAudio
+#endif
 import OSLog
 import Sparkle
 import SwiftData
@@ -25,7 +27,7 @@ struct VoiceInkApp: App {
     @StateObject private var activeWindowService = ActiveWindowService.shared
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
     @AppStorage("enableAnnouncements") private var enableAnnouncements = true
-    @State private var showMenuBarIcon = true
+    @AppStorage("ShowMenuBarIcon") private var showMenuBarIcon = true
     @State private var didShowAccessibilityReminder = false
 
     // Audio cleanup manager for automatic deletion of old audio files
@@ -170,6 +172,9 @@ struct VoiceInkApp: App {
         }
 
         AppShortcuts.updateAppShortcutParameters()
+
+        // CLI bridge: lets the `voiceink <audio file>` shell command request transcription.
+        CLIBridgeService.shared.start(engine: engine, modelContext: resolvedContainer.mainContext)
 
         let statsMigrationTask = SessionMetricMigrationService.shared.runStatsMigrationIfNeeded(
             modelContainer: resolvedContainer)

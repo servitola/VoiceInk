@@ -7,7 +7,7 @@ enum TranscriptionModelRegistry {
     }
 
     private static let predefinedModels: [any TranscriptionModel] = {
-        let nonCloudModels: [any TranscriptionModel] = [
+        var nonCloudModels: [any TranscriptionModel] = [
             // Native Apple Model
             NativeAppleModel(
                 name: "apple-speech",
@@ -15,63 +15,6 @@ enum TranscriptionModelRegistry {
                 description: "Uses the native Apple Speech framework for transcription. Requires macOS 26",
                 isMultilingualModel: true,
                 supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .nativeApple)
-            ),
-
-            // Parakeet Models
-            FluidAudioModel(
-                name: "parakeet-tdt-0.6b-v2",
-                displayName: "Parakeet V2",
-                description: "NVIDIA's Parakeet V2 model optimized for lightning-fast English-only transcription",
-                size: "474 MB",
-                speed: 0.99,
-                accuracy: 0.94,
-                ramUsage: 0.8,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
-            ),
-            FluidAudioModel(
-                name: "parakeet-tdt-0.6b-v3",
-                displayName: "Parakeet V3",
-                description: "Parakeet V3 with English and 25 European language support",
-                size: "494 MB",
-                speed: 0.99,
-                accuracy: 0.94,
-                ramUsage: 0.8,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .fluidAudio)
-            ),
-            FluidAudioModel(
-                name: "parakeet-unified-0.6b",
-                displayName: "Parakeet Unified",
-                description: "English-only Parakeet model with native realtime transcription support",
-                size: "1.2 GB",
-                speed: 0.99,
-                accuracy: 0.95,
-                ramUsage: 1.0,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
-            ),
-            FluidAudioModel(
-                name: "nemotron-latin-0.6b",
-                displayName: "Nemotron Latin",
-                description: "NVIDIA's Nemotron streaming model with Latin language support",
-                size: "620 MB",
-                speed: 0.99,
-                accuracy: 0.92,
-                ramUsage: 1.2,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.nemotronLatin
-            ),
-            FluidAudioModel(
-                name: "nemotron-multilingual-0.6b",
-                displayName: "Nemotron Multilingual",
-                description: "NVIDIA's Nemotron streaming model with multilingual support",
-                size: "672 MB",
-                speed: 0.99,
-                accuracy: 0.90,
-                ramUsage: 1.5,
-                supportsStreaming: true,
-                supportedLanguages: LanguageDictionary.nemotronMultilingual
             ),
 
             // Local Models
@@ -156,6 +99,70 @@ enum TranscriptionModelRegistry {
                 ramUsage: 1.0
             ),
         ]
+
+        // Parakeet Models (Apple Neural Engine + Float16 — unavailable on Intel Macs, so the
+        // FluidAudio package is not linked there). Built as a separate array and inserted after
+        // Apple Speech to avoid `#if` inside an array literal, which does not parse.
+        #if canImport(FluidAudio)
+        let parakeetModels: [any TranscriptionModel] = [
+            FluidAudioModel(
+                name: "parakeet-tdt-0.6b-v2",
+                displayName: "Parakeet V2",
+                description: "NVIDIA's Parakeet V2 model optimized for lightning-fast English-only transcription",
+                size: "474 MB",
+                speed: 0.99,
+                accuracy: 0.94,
+                ramUsage: 0.8,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
+            ),
+            FluidAudioModel(
+                name: "parakeet-tdt-0.6b-v3",
+                displayName: "Parakeet V3",
+                description: "Parakeet V3 with English and 25 European language support",
+                size: "494 MB",
+                speed: 0.99,
+                accuracy: 0.94,
+                ramUsage: 0.8,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .fluidAudio)
+            ),
+            FluidAudioModel(
+                name: "parakeet-unified-0.6b",
+                displayName: "Parakeet Unified",
+                description: "English-only Parakeet model with native realtime transcription support",
+                size: "1.2 GB",
+                speed: 0.99,
+                accuracy: 0.95,
+                ramUsage: 1.0,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.forProvider(isMultilingual: false, provider: .fluidAudio)
+            ),
+            FluidAudioModel(
+                name: "nemotron-latin-0.6b",
+                displayName: "Nemotron Latin",
+                description: "NVIDIA's Nemotron streaming model with Latin language support",
+                size: "620 MB",
+                speed: 0.99,
+                accuracy: 0.92,
+                ramUsage: 1.2,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.nemotronLatin
+            ),
+            FluidAudioModel(
+                name: "nemotron-multilingual-0.6b",
+                displayName: "Nemotron Multilingual",
+                description: "NVIDIA's Nemotron streaming model with multilingual support",
+                size: "672 MB",
+                speed: 0.99,
+                accuracy: 0.90,
+                ramUsage: 1.5,
+                supportsStreaming: true,
+                supportedLanguages: LanguageDictionary.nemotronMultilingual
+            ),
+        ]
+        nonCloudModels.insert(contentsOf: parakeetModels, at: 1)
+        #endif
 
         let cloudModels: [any TranscriptionModel] = CloudProviderRegistry.allProviders.flatMap { $0.models }
         return nonCloudModels + cloudModels
