@@ -105,6 +105,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
     private var activeRecordingContextStore: RecordingContextSnapshotStore?
     private var activeRecordingContextTasks: [Task<Void, Never>] = []
 
+    // Wake word detection
+    @Published var isWakeWordListening = false
+    var wakeWordService: WakeWordListeningService?
+
     let recorder = Recorder()
     var recordedFile: URL? = nil
     let recordingsDirectory: URL
@@ -161,6 +165,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
         setupNotifications()
         createRecordingsDirectoryIfNeeded()
+        initializeWakeWordService()
     }
 
     private func createRecordingsDirectoryIfNeeded() {
@@ -221,6 +226,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
                 await cleanupResources()
             }
         } else {
+            // Stop wake word listening when starting manual recording
+            if isWakeWordListening {
+                await stopWakeWordListening()
+            }
+
             let canContinueAssistantSession = isAssistantFollowUp && assistantSession.canSendFollowUp
             let recordingUseCase: RecordingUseCase = canContinueAssistantSession ? .assistantFollowUp : .newSession
 
