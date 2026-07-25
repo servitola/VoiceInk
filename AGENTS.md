@@ -270,29 +270,58 @@ no `ggml` lines. `make whisper` skips rebuilding when `build-apple/` already
 exists, so a stale/dynamic xcframework there silently poisons every rebuild -
 delete `build-apple/` to force a clean self-contained rebuild.
 
+## Automated upstream sync (cron)
+
+A nightly job syncs this fork with upstream — it does NOT live in this repo:
+
+- Fragment: `dotfiles_private/cron/cron_jobs/voiceink.private.cron` — 04:15 daily
+- Script: `dotfiles_private/cron/scripts/voiceink-upstream-sync.sh`
+- Log: `dotfiles/cron/logs/voiceink-upstream-sync.log`
+
+The script does not reimplement the sync: it feeds `.claude/commands/sync-upstream.md`
+(the single source of truth) to `codex exec`, so editing that runbook changes what the
+cron does. The wrapper owns only the cheap deterministic parts — preflight gates
+(repo mounted, on `main`, clean tree, no rebase in progress), the "are we behind?"
+check that skips the agent entirely on a no-op day, and an **independent** re-verification
+afterwards (upstream is an ancestor, no conflict markers, installed version matches,
+bundle carries `Authority=VoiceInk Local Signing`, app actually running) — because an
+agent can report success it did not achieve.
+
+**It never pushes.** `ALLOW_PUSH=0` plus a prompt override forbidding `git push`, so
+commits accumulate locally and the Telegram notification carries the push command.
+Someone must push by hand periodically. Flip `ALLOW_PUSH=1` to change that.
+
 ## Handoff
 
-Current state (2026-07-18): Wake word now has a microphone selector.
-Committed (not pushed): `feat(wake-word): add microphone selection`. Root
-cause was `WakeWordListeningService` creating `AVAudioEngine().inputNode`,
-which always binds to the system default input and ignored the app's mic
-choice. Fix: `resolveInputDeviceID()` -> `inputNode.auAudioUnit.setDeviceID(...)`
-before querying format/installing the tap; empty UID follows
-`AudioDeviceManager.getCurrentDevice()` (same mic as recording). New
-`configureMicrophone(uid:)` restarts listening on change; pass-through
-`configureWakeWordMicrophone(uid:)` on VoiceInkEngine; Microphone picker
-in WakeWordSettingsView persisting `wakeWordMicrophoneUID` (default
-"Same as Recording"). `xcodebuild -scheme VoiceInk` compiles clean
-(only signing fails without a provisioning profile). NOT verified in a
-running app / with a rebuilt `.app`.
+Current state (2026-07-25): fork is synced with upstream **2.0 (build 205)** and
+`origin/main` is in sync (`0 0`). History was rewritten from 27 junk commits ("1",
+"Build", "tests", "rebase fixes") into **10 clean commits** on top of upstream and
+force-pushed; the source tree was verified byte-identical to the pre-cleanup tree
+apart from two dropped build artifacts (`default.profraw`, the compiled
+`VoiceInkCLI/voiceink` binary, both now gitignored). Build, `VoiceInkTests` and the
+launch check are green, and the nightly cron ran end-to-end successfully once.
+
+**Always build with `make local-stable`, never plain `make local`.** `make local`
+defaults to ad-hoc signing, which has no stable code identity: every reinstall gives
+the bundle a new cdhash, so macOS drops its TCC grants and the app keeps launching
+fine while silently ignoring the recording hotkey. This bit us this session. The
+keychain also had a `VoiceInk Local Signing` certificate **without its private key**
+(visible to `find-certificate`, absent from `find-identity`), which made
+`make local-stable` itself fail confusingly — deleted and recreated. Accessibility /
+Input Monitoring / Microphone were re-granted to the new signature and the hotkey
+works. Details in `COMMON-ISSUES.md` §12b and `BUILDING.md`.
 
 Next steps / open questions:
-- Verify at runtime: enable wake word, pick a non-default mic, confirm it
-  actually listens on that device (rebuild `/Applications/VoiceInk.app` via
-  `make local-stable`).
-- Minor UX edge: if a saved `wakeWordMicrophoneUID` device is unplugged, the
-  picker renders blank (service still falls back to the app device). Could add
-  an explicit "Same as Recording" fallback in the UI when the UID is missing.
+- The cron leaves commits unpushed by design — check `git log origin/main..main`
+  every so often and push with `--force-with-lease` (history is rebased, so a plain
+  push will be rejected).
+- `dotfiles_private` has 2 unpushed commits from this work (`ece8417`, `f3a5b5c`);
+  never pushed, pending a go-ahead.
+- Wake-word mic picker was never verified at runtime: enable wake word, pick a
+  non-default mic, confirm it listens on that device.
+- Minor UX edge: if a saved `wakeWordMicrophoneUID` device is unplugged, the picker
+  renders blank (service still falls back to the app device). Could add an explicit
+  "Same as Recording" fallback when the UID is missing.
 - Optional cleanup: `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels/`
   still contains a junk `__MACOSX/` dir from an old unzip - safe to `rm -rf`.
 
