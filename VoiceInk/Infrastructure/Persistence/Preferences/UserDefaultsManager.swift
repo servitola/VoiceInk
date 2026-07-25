@@ -10,6 +10,7 @@ extension UserDefaults {
         static let wakeWordMicrophoneModelUID = "wakeWordMicrophoneModelUID"
         static let wakeWordMicrophoneName = "wakeWordMicrophoneName"
         static let wakeWordStopsRecording = "wakeWordStopsRecording"
+        static let removeWakeWordFromTranscription = "removeWakeWordFromTranscription"
         static let wakeWordEngine = "wakeWordEngine"
         static let wakeWordModelName = "wakeWordModelName"
         static let affiliatePromotionDismissed = "VoiceInkAffiliatePromotionDismissed"
@@ -107,6 +108,18 @@ extension UserDefaults {
     var wakeWordStopsRecording: Bool {
         get { object(forKey: Keys.wakeWordStopsRecording) as? Bool ?? true }
         set { setValue(newValue, forKey: Keys.wakeWordStopsRecording) }
+    }
+
+    /// Keep the wake word out of the dictated text.
+    ///
+    /// Read through `object(forKey:)`, not `bool(forKey:)`: the key is only
+    /// written once the settings toggle is actually moved, and `bool(forKey:)`
+    /// answers `false` for a key that was never written. That silently disabled
+    /// wake word removal entirely for anyone who left the switch alone - which
+    /// is everyone, since the UI shows it as on.
+    var removeWakeWordFromTranscription: Bool {
+        get { object(forKey: Keys.removeWakeWordFromTranscription) as? Bool ?? true }
+        set { setValue(newValue, forKey: Keys.removeWakeWordFromTranscription) }
     }
 
     /// Which recognition backend the wake word detector uses.
