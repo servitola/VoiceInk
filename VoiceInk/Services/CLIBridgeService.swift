@@ -9,7 +9,8 @@ import os
 ///
 /// Protocol:
 ///   * Request:  name `com.prakashjoshipax.VoiceInk.cli.transcribe.request`
-///               userInfo: `id` (String), `audioPath` (String)
+///               userInfo: `id` (String), `audioPath` (String),
+///                         `ephemeralLocal` (Bool, optional)
 ///   * Response: name `com.prakashjoshipax.VoiceInk.cli.transcribe.response.<id>`
 ///               userInfo on success: `ok=true`, `text`, `enhancedText?`, `modelName`
 ///               userInfo on failure: `ok=false`, `error`
@@ -62,15 +63,16 @@ final class CLIBridgeService {
 
         let resolved = (audioPath as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: resolved)
+        let ephemeralLocal = (info["ephemeralLocal"] as? Bool) ?? false
 
         Task { @MainActor in
-            let result = await self.transcribe(audioURL: url)
+            let result = await self.transcribe(audioURL: url, ephemeralLocal: ephemeralLocal)
             self.sendResponse(id: id, result: result)
             self.inFlight.remove(id)
         }
     }
 
-    private func transcribe(audioURL: URL) async -> Result<Payload, BridgeError> {
+    private func transcribe(audioURL: URL, ephemeralLocal: Bool) async -> Result<Payload, BridgeError> {
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
             return .failure(.fileNotFound(audioURL.path))
         }
@@ -91,6 +93,9 @@ final class CLIBridgeService {
             return .failure(.noModelSelected)
         }
         let model = runtimeConfiguration.model
+        if ephemeralLocal && model.provider != .whisper && model.provider != .fluidAudio {
+            return .failure(.localModelRequired(model.displayName))
+        }
 
         // The downstream WhisperTranscriptionService.readAudioSamples reads the
         // file as raw 16-bit PCM after a 44-byte WAV header; it does not decode
@@ -109,13 +114,48 @@ final class CLIBridgeService {
             return .failure(.transcriptionFailed("Audio decode failed: \(error.localizedDescription)"))
         }
 
-        let service = AudioTranscriptionService(
-            modelContext: modelContext,
-            serviceRegistry: engine.serviceRegistry,
-            enhancementService: engine.enhancementService
-        )
-
         do {
+            if ephemeralLocal {
+                let mode = runtimeConfiguration.mode
+                let languages = TranscriptionLanguageSupport.validLanguagesOrFallback(
+                    mode?.selectedLanguages ?? [],
+                    for: model,
+                    realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+                )
+                let language = TranscriptionLanguageSupport.singleLanguage(
+                    from: languages,
+                    for: model,
+                    realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+                )
+                let context = TranscriptionRequestContext(
+                    languages: languages,
+                    language: language,
+                    prompt: model.provider == .whisper ? WhisperPrompt.combinedPrompt(for: languages) : nil
+                )
+                var text = try await engine.serviceRegistry.transcribe(
+                    audioURL: tempWAV,
+                    model: model,
+                    context: context
+                )
+                text = TranscriptionOutputFilter.filter(text)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let formatting = ModeRuntimeResolver.transcriptionFormattingConfiguration(mode: mode)
+                if formatting.isTextFormattingEnabled {
+                    text = ParagraphFormatter.format(text)
+                }
+                text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+                return .success(Payload(
+                    text: text,
+                    enhancedText: nil,
+                    modelName: model.displayName
+                ))
+            }
+
+            let service = AudioTranscriptionService(
+                modelContext: modelContext,
+                serviceRegistry: engine.serviceRegistry,
+                enhancementService: engine.enhancementService
+            )
             let transcription = try await service.retranscribeAudio(
                 from: tempWAV, using: model, mode: runtimeConfiguration.mode)
             return .success(Payload(
@@ -163,6 +203,7 @@ final class CLIBridgeService {
         case unsupportedFormat(String)
         case engineNotReady
         case noModelSelected
+        case localModelRequired(String)
         case transcriptionFailed(String)
 
         var errorDescription: String? {
@@ -175,6 +216,8 @@ final class CLIBridgeService {
                 return "VoiceInk engine is not ready yet"
             case .noModelSelected:
                 return "No transcription model is selected in VoiceInk"
+            case .localModelRequired(let modelName):
+                return "Ephemeral transcription requires a local Whisper or Parakeet model; selected: \(modelName)"
             case .transcriptionFailed(let message):
                 return "Transcription failed: \(message)"
             }

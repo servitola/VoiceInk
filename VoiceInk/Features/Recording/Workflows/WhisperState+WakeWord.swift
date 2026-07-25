@@ -18,6 +18,17 @@ extension VoiceInkEngine {
             guard let self else { return false }
             return self.recordingState == .idle
         }
+        // The local engine reuses the app's shared FluidAudio service, so the
+        // Parakeet model is loaded once for both dictation and wake word.
+        service.transcriberProvider = { [weak self] in
+            self?.serviceRegistry.fluidAudioTranscriptionService
+        }
+        service.availableLocalModels = { [weak self] in
+            guard let self else { return [] }
+            return self.transcriptionModelManager.usableModels
+                .filter { $0.provider == .fluidAudio && $0.name.hasPrefix("parakeet-tdt") }
+                .map(\.name)
+        }
         service.onStateChanged = { [weak self, weak service] in
             guard let self, let service else { return }
             self.syncWakeWordState(from: service)
@@ -147,6 +158,24 @@ extension VoiceInkEngine {
         UserDefaults.standard.wakeWordMicrophoneName = uid.isEmpty ? nil : device?.name
 
         service.configureMicrophone(uid: uid, modelUID: modelUID)
+    }
+
+    /// Select which backend recognises the wake word.
+    func configureWakeWordEngine(_ kind: WakeWordEngineKind) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+        service.configureEngine(kind)
+    }
+
+    /// Select the transcription model used by the local wake word engine.
+    func configureWakeWordModel(named modelName: String) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+        service.configureLocalModel(named: modelName)
     }
 
     /// Toggle wake word listening on/off

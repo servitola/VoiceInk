@@ -294,7 +294,7 @@ func ensureVoiceInkRunning() {
     }
 }
 
-func transcribe(audioPath: String, timeout: TimeInterval = 600) {
+func transcribe(audioPath: String, ephemeralLocal: Bool = false, timeout: TimeInterval = 600) {
     let resolved = (audioPath as NSString).expandingTildeInPath
     let absolute: String
     if (resolved as NSString).isAbsolutePath {
@@ -314,9 +314,10 @@ func transcribe(audioPath: String, timeout: TimeInterval = 600) {
     let center = DistributedNotificationCenter.default()
     let result = TranscriptionResult()
 
-    let userInfo: [String: String] = [
+    let userInfo: [String: Any] = [
         "id": id,
-        "audioPath": absolute
+        "audioPath": absolute,
+        "ephemeralLocal": ephemeralLocal
     ]
 
     // Tracks whether we've already posted the request (after bridge readiness).
@@ -408,12 +409,15 @@ func printUsage() {
     Usage:
       \(name) <audio-file>          Transcribe audio file via running VoiceInk app
       \(name) transcribe <file>     Same as above, explicit form
+      \(name) transcribe --ephemeral-local <file>
+                                  Local model only; no history, audio copy, or enhancement
       \(name) export <path>         Export dictionary to JSON file
       \(name) import <path>         Import dictionary from JSON file
 
     Examples:
       \(name) ~/Recordings/55.ogg
       \(name) transcribe ./meeting.m4a
+      \(name) transcribe --ephemeral-local ./private-message.ogg
       \(name) export ~/dotfiles/voiceink/dictionary.json
       \(name) import ~/dotfiles/voiceink/dictionary.json
 
@@ -439,8 +443,14 @@ case "import":
     guard args.count == 3 else { printUsage(); exit(1) }
     importDictionary(from: (args[2] as NSString).expandingTildeInPath)
 case "transcribe":
-    guard args.count == 3 else { printUsage(); exit(1) }
-    transcribe(audioPath: args[2])
+    if args.count == 4 && args[2] == "--ephemeral-local" {
+        transcribe(audioPath: args[3], ephemeralLocal: true)
+    } else if args.count == 3 {
+        transcribe(audioPath: args[2])
+    } else {
+        printUsage()
+        exit(1)
+    }
 default:
     // Treat the first arg as an audio file path. This makes `voiceink ~/55.ogg` work.
     if args.count == 2 {
