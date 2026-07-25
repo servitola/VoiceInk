@@ -126,6 +126,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
     @Published var wakeWordFailureMessage: String?
     /// Wake word recognition is running on Apple's servers, not on device.
     @Published var wakeWordUsingServerRecognition = false
+    /// Last thing the wake word recogniser heard. Shown in settings so a
+    /// detector that never fires can be told apart from one that never hears.
+    @Published var wakeWordLastRecognizedText = ""
     var wakeWordService: WakeWordListeningService?
 
     let recorder = Recorder()
