@@ -103,6 +103,20 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private var engineKind: WakeWordEngineKind = .localModel
     /// Transcription model for the local engine.
     private var localModelName: String?
+
+    /// When the detector last fired. The recognisers report a growing utterance
+    /// incrementally ("лошадка", then "лошадка сделай..."), and the wake word
+    /// stays in every one of those, so without a cooldown a single spoken word
+    /// triggers over and over - which matters much more now that a second
+    /// trigger ends the dictation the first one started.
+    private var lastDetectionAt: Date?
+    private let detectionCooldown: TimeInterval = 2.5
+
+    /// The wake word also finishes dictation, so the detector keeps listening
+    /// while the recorder runs instead of handing the microphone over.
+    private var stopsRecording: Bool {
+        UserDefaults.standard.object(forKey: "wakeWordStopsRecording") as? Bool ?? true
+    }
     /// UID of the microphone to listen on. Empty = follow the app's recording device selection.
     private var microphoneUID: String = ""
     /// Stable identity of that microphone — USB UIDs embed the port location ID
@@ -818,6 +832,10 @@ class WakeWordListeningService: NSObject, ObservableObject {
         // Check for wake word in the most recent transcriptions
         let recentText = recognizedTextBuffer.suffix(3).joined(separator: " ")
 
+        if let lastDetectionAt, Date().timeIntervalSince(lastDetectionAt) < detectionCooldown {
+            return
+        }
+
         if Self.detectWakeWord(wakeWord, in: recentText) {
             logger.notice("🎯 Wake word detected: '\(self.wakeWord)'")
             handleWakeWordDetection()
@@ -884,6 +902,15 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private func handleWakeWordDetection() {
         // Clear buffer to prevent immediate re-triggering
         recognizedTextBuffer.removeAll()
+        lastDetectionAt = Date()
+
+        // When the word also ends dictation, the detector has to keep the
+        // microphone through the recording - stopping here is what makes the
+        // second "лошадка" impossible to hear.
+        guard !stopsRecording else {
+            onWakeWordDetected?()
+            return
+        }
 
         // Stop listening temporarily
         Task {
