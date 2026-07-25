@@ -176,6 +176,18 @@ struct WakeWordSettingsView: View {
                         ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
                             Text(device.name).tag(device.uid)
                         }
+
+                        // Keep the saved choice selectable while it is unplugged,
+                        // otherwise the picker renders blank and looks unset.
+                        if isSavedMicrophoneDisconnected {
+                            Text(
+                                String(
+                                    format: String(localized: "%@ (not connected)"),
+                                    savedMicrophoneName
+                                )
+                            )
+                            .tag(wakeWordMicrophoneUID)
+                        }
                     }
                     .labelsHidden()
                     .onChange(of: wakeWordMicrophoneUID) { _, newValue in
@@ -197,6 +209,18 @@ struct WakeWordSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.leading, 28)
+
+                if voiceInkEngine.wakeWordMicrophoneUnavailable {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+
+                        Text("The selected microphone is not connected. Wake word detection is paused — it will not switch to another microphone on its own.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.leading, 28)
+                }
             }
             .padding()
             .background(
@@ -274,6 +298,14 @@ struct WakeWordSettingsView: View {
                         )
                             .font(.caption)
                             .foregroundColor(.secondary)
+
+                        // The device actually bound by the audio engine, which is
+                        // the only way to tell the picker took effect.
+                        if voiceInkEngine.isWakeWordListening, let device = voiceInkEngine.wakeWordBoundDeviceName {
+                            Text(String(format: String(localized: "Listening on: %@"), device))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
@@ -289,6 +321,15 @@ struct WakeWordSettingsView: View {
     }
 
     // MARK: - Helper Methods
+
+    private var isSavedMicrophoneDisconnected: Bool {
+        !wakeWordMicrophoneUID.isEmpty
+            && !audioDeviceManager.availableDevices.contains(where: { $0.uid == wakeWordMicrophoneUID })
+    }
+
+    private var savedMicrophoneName: String {
+        UserDefaults.standard.wakeWordMicrophoneName ?? String(localized: "Saved microphone")
+    }
 
     private func handleWakeWordToggle(enabled: Bool) {
         Task {

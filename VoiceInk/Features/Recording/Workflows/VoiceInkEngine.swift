@@ -96,6 +96,14 @@ class VoiceInkEngine: NSObject, ObservableObject {
         didSet {
             guard oldValue != recordingState else { return }
             ShortcutDiagnostics.notice("recording-state old=\(oldValue) new=\(recordingState) visible=\(recorderUIManager?.isRecorderPanelVisible ?? false) startID=\(activeRecordingStartID?.uuidString ?? "none")")
+
+            // Wake word listening resumes on the actual return to idle. The panel
+            // dismiss hook fires from inside the pipeline, while the state is still
+            // .transcribing/.enhancing, so it cannot be the only trigger.
+            guard recordingState == .idle else { return }
+            Task { [weak self] in
+                await self?.resumeWakeWordListeningIfEnabled()
+            }
         }
     }
     @Published var shouldCancelRecording = false
@@ -113,6 +121,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
     // Wake word detection
     @Published var isWakeWordListening = false
+    /// The microphone chosen for wake word detection is not currently connected.
+    @Published var wakeWordMicrophoneUnavailable = false
+    /// Device the wake word detector is actually bound to, for settings feedback.
+    @Published var wakeWordBoundDeviceName: String?
     var wakeWordService: WakeWordListeningService?
 
     let recorder = Recorder()
