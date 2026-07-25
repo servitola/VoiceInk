@@ -24,6 +24,16 @@ class WakeWordListeningService: NSObject, ObservableObject {
     @Published var boundDeviceName: String? {
         didSet { if oldValue != boundDeviceName { onStateChanged?() } }
     }
+    /// Why the detector gave up, when it did. Surfaced in settings instead of
+    /// letting it restart in a loop that just blinks the microphone indicator.
+    @Published var failureMessage: String? {
+        didSet { if oldValue != failureMessage { onStateChanged?() } }
+    }
+    /// True while recognition runs on Apple's servers rather than on device.
+    /// Worth showing: an always-on listener then streams the room continuously.
+    @Published var usingServerRecognition = false {
+        didSet { if oldValue != usingServerRecognition { onStateChanged?() } }
+    }
 
     /// Called whenever the observable state above changes, including from the
     /// service's own rolling restarts and device-change handling.
@@ -47,6 +57,18 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private var generation = 0
     private var pendingRestartTask: Task<Void, Never>?
     private var restartBackoffSeconds: UInt64 = 1
+
+    /// When the current recognition session started, and how it was configured.
+    /// A session that dies within seconds of starting is a configuration failure,
+    /// not the ordinary end-of-request - restarting it on a short timer just
+    /// reopens the microphone over and over.
+    private var sessionStartedAt: Date?
+    private var sessionUsedOnDeviceRecognition = false
+    private var consecutiveImmediateFailures = 0
+    /// Set once on-device recognition proves unusable for the chosen language,
+    /// so the next attempt goes through the server instead of failing forever.
+    private var onDeviceRecognitionDisabled = false
+    private let immediateFailureThreshold: TimeInterval = 15
 
     private var wakeWord: String = "лошадка"
     private var language: String = "ru-RU"
@@ -100,6 +122,10 @@ class WakeWordListeningService: NSObject, ObservableObject {
         UserDefaults.standard.wakeWordMicrophoneModelUID = self.microphoneModelUID
 
         logger.notice("Wake word microphone configured: '\(uid.isEmpty ? "app default" : uid)'")
+
+        // An explicit settings change deserves a clean slate.
+        consecutiveImmediateFailures = 0
+        restartBackoffSeconds = 1
 
         // Restart listening if already active so the new device takes effect
         if isListening {
@@ -205,6 +231,10 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
         generation &+= 1
         let myGeneration = generation
+        // Note: consecutiveImmediateFailures deliberately survives a restart -
+        // every restart goes through here, so resetting it would keep the counter
+        // at zero and the failure loop would never be detected.
+        failureMessage = nil
 
         do {
             try await startRecognition(generation: myGeneration)
@@ -213,7 +243,6 @@ class WakeWordListeningService: NSObject, ObservableObject {
             guard myGeneration == generation else { return }
 
             isListening = true
-            restartBackoffSeconds = 1
             logger.notice(
                 "✅ Wake word listening started for '\(self.wakeWord)' on '\(self.boundDeviceName ?? "unknown", privacy: .public)'"
             )
@@ -246,6 +275,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
         recognizedTextBuffer.removeAll()
         boundDeviceID = nil
         boundDeviceName = nil
+        sessionStartedAt = nil
 
         if isListening {
             isListening = false
@@ -308,7 +338,11 @@ class WakeWordListeningService: NSObject, ObservableObject {
         // Server-side recognition caps a single request at about a minute and is
         // rate limited, which an always-on listener hits constantly - and it would
         // stream the room to Apple around the clock. Stay on device when possible.
-        request.requiresOnDeviceRecognition = speechRecognizer.supportsOnDeviceRecognition
+        // supportsOnDeviceRecognition can still report true while the language
+        // asset is missing, so this falls back to the server after repeated
+        // immediate failures.
+        let useOnDevice = speechRecognizer.supportsOnDeviceRecognition && !onDeviceRecognitionDisabled
+        request.requiresOnDeviceRecognition = useOnDevice
 
         // The tap runs on a realtime audio thread, so it captures the request
         // directly and never touches actor-isolated state.
@@ -337,9 +371,12 @@ class WakeWordListeningService: NSObject, ObservableObject {
         self.boundDeviceID = device.id
         self.boundDeviceName = device.name
         self.microphoneUnavailable = false
+        self.sessionStartedAt = Date()
+        self.sessionUsedOnDeviceRecognition = useOnDevice
+        self.usingServerRecognition = !useOnDevice
 
         logger.notice(
-            "Wake word listening on device \(device.id, privacy: .public) '\(device.name, privacy: .public)', onDevice recognition: \(speechRecognizer.supportsOnDeviceRecognition, privacy: .public)"
+            "Wake word listening on device \(device.id, privacy: .public) '\(device.name, privacy: .public)', onDevice recognition: \(useOnDevice, privacy: .public)"
         )
 
         // Start recognition task
@@ -348,11 +385,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
                 guard let self = self, myGeneration == self.generation else { return }
 
                 if let error = error {
-                    self.logger.error("Recognition error: \(error.localizedDescription)")
-
-                    let delay = self.restartBackoffSeconds
-                    self.restartBackoffSeconds = min(delay * 2, self.maxRestartBackoffSeconds)
-                    self.scheduleRestart(after: delay, reason: "recognition error")
+                    self.handleRecognitionFailure(error)
                     return
                 }
 
@@ -363,6 +396,55 @@ class WakeWordListeningService: NSObject, ObservableObject {
         }
 
         scheduleRestart(after: UInt64.random(in: rollingRestartRange), reason: "rolling restart")
+    }
+
+    /// Decides what to do about a failed recognition session.
+    ///
+    /// An ordinary session ends after its time limit and simply restarts. One
+    /// that dies within seconds of starting is a configuration problem: retrying
+    /// it on a one-second timer produces nothing but a blinking microphone
+    /// indicator. So repeated immediate failures first drop on-device
+    /// recognition, and then stop the detector outright with a message.
+    private func handleRecognitionFailure(_ error: Error) {
+        let nsError = error as NSError
+        let lifetime = sessionStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+
+        logger.error(
+            "Recognition error after \(String(format: "%.2f", lifetime), privacy: .public)s: \(error.localizedDescription, privacy: .public) [\(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)]"
+        )
+
+        guard lifetime < immediateFailureThreshold else {
+            // Lived long enough to be doing its job - this is a normal cycle.
+            consecutiveImmediateFailures = 0
+            restartBackoffSeconds = 1
+            scheduleRestart(after: 1, reason: "recognition ended")
+            return
+        }
+
+        consecutiveImmediateFailures += 1
+
+        if consecutiveImmediateFailures >= 3 && sessionUsedOnDeviceRecognition {
+            logger.error("On-device recognition is unusable for \(self.language, privacy: .public) - falling back to server recognition")
+            onDeviceRecognitionDisabled = true
+            consecutiveImmediateFailures = 0
+            restartBackoffSeconds = 1
+            scheduleRestart(after: 1, reason: "on-device fallback")
+            return
+        }
+
+        if consecutiveImmediateFailures >= 3 {
+            logger.error("Wake word recognition keeps failing immediately - stopping")
+            let message = error.localizedDescription
+            Task { [weak self] in
+                await self?.stopListening()
+                self?.failureMessage = message
+            }
+            return
+        }
+
+        let delay = restartBackoffSeconds
+        restartBackoffSeconds = min(delay * 2, maxRestartBackoffSeconds)
+        scheduleRestart(after: delay, reason: "recognition error")
     }
 
     /// Schedules a stop/start cycle. Replaces any previously scheduled one, so a
@@ -432,6 +514,10 @@ class WakeWordListeningService: NSObject, ObservableObject {
     }
 
     private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
+        // Recognition is demonstrably working - forget earlier failures.
+        consecutiveImmediateFailures = 0
+        restartBackoffSeconds = 1
+
         let transcription = result.bestTranscription.formattedString.lowercased()
         lastRecognizedText = transcription
 
