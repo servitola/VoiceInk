@@ -9,6 +9,7 @@ extension UserDefaults {
         static let wakeWordMicrophoneUID = "wakeWordMicrophoneUID"
         static let wakeWordMicrophoneModelUID = "wakeWordMicrophoneModelUID"
         static let wakeWordMicrophoneName = "wakeWordMicrophoneName"
+        static let wakeWordStopsRecording = "wakeWordStopsRecording"
         static let wakeWordEngine = "wakeWordEngine"
         static let wakeWordModelName = "wakeWordModelName"
         static let affiliatePromotionDismissed = "VoiceInkAffiliatePromotionDismissed"
@@ -98,6 +99,14 @@ extension UserDefaults {
     var wakeWordMicrophoneName: String? {
         get { string(forKey: Keys.wakeWordMicrophoneName) }
         set { setValue(newValue, forKey: Keys.wakeWordMicrophoneName) }
+    }
+
+    /// Saying the wake word again ends dictation, the way pressing the shortcut
+    /// a second time does. Defaults to true, so the feature works without the
+    /// key ever having been written.
+    var wakeWordStopsRecording: Bool {
+        get { object(forKey: Keys.wakeWordStopsRecording) as? Bool ?? true }
+        set { setValue(newValue, forKey: Keys.wakeWordStopsRecording) }
     }
 
     /// Which recognition backend the wake word detector uses.
