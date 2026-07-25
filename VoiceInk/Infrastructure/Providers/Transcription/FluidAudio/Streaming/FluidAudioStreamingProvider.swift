@@ -64,7 +64,9 @@ final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
         try await manager.loadModels(models)
         self.asrManager = manager
         self.decoderLayerCount = await manager.decoderLayerCount
-        self.languageHint = FluidAudioTranscriptionService.languageHint(from: language, model: model)
+        // Streaming connects with the selection already reduced to one language (or "auto").
+        self.languageHint = FluidAudioTranscriptionService.languageHint(
+            from: language.map { [$0] } ?? [], model: model)
 
         agreementEngine.reset()
         audioBuffer = []
