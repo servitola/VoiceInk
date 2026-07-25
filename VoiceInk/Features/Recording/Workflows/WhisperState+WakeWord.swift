@@ -14,11 +14,29 @@ extension VoiceInkEngine {
                 await self?.handleWakeWordDetected()
             }
         }
+        service.canStartListening = { [weak self] in
+            guard let self else { return false }
+            return self.recordingState == .idle
+        }
+        service.onStateChanged = { [weak self, weak service] in
+            guard let self, let service else { return }
+            self.syncWakeWordState(from: service)
+        }
         self.wakeWordService = service
 
         // Auto-start if enabled in settings
         if UserDefaults.standard.bool(forKey: "isWakeWordEnabled") {
             Task {
+                // AudioDeviceManager publishes its device list asynchronously.
+                // Starting before it lands resolves no device and binds the engine
+                // to the system default microphone instead of the chosen one.
+                if AudioDeviceManager.shared.availableDevices.isEmpty {
+                    await withCheckedContinuation { continuation in
+                        AudioDeviceManager.shared.loadAvailableDevices {
+                            continuation.resume()
+                        }
+                    }
+                }
                 await startWakeWordListening()
             }
         }
@@ -39,7 +57,7 @@ extension VoiceInkEngine {
 
         await service.startListening()
         await MainActor.run {
-            isWakeWordListening = service.isListening
+            syncWakeWordState(from: service)
         }
 
         if service.isListening {
@@ -53,10 +71,18 @@ extension VoiceInkEngine {
 
         await service.stopListening()
         await MainActor.run {
-            isWakeWordListening = false
+            syncWakeWordState(from: service)
         }
 
         logger.notice("🎤 Wake word listening stopped")
+    }
+
+    /// Mirror the service's state onto the engine so views can observe it.
+    @MainActor
+    func syncWakeWordState(from service: WakeWordListeningService) {
+        isWakeWordListening = service.isListening
+        wakeWordMicrophoneUnavailable = service.microphoneUnavailable
+        wakeWordBoundDeviceName = service.boundDeviceName
     }
 
     /// Handle wake word detection - trigger recording
@@ -81,9 +107,13 @@ extension VoiceInkEngine {
 
         guard isEnabled else { return }
         guard recordingState == .idle else { return }
+        guard !isWakeWordListening else { return }
 
         // Small delay before resuming
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        // The state can move again during the delay (a new recording started).
+        guard recordingState == .idle else { return }
 
         await startWakeWordListening()
     }
@@ -107,7 +137,13 @@ extension VoiceInkEngine {
             return
         }
 
-        service.configureMicrophone(uid: uid)
+        // Capture the stable model UID now, while the device is connected - the
+        // UID alone changes whenever a USB device moves to another port.
+        let device = AudioDeviceManager.shared.availableDevices.first(where: { $0.uid == uid })
+        let modelUID = device.flatMap { AudioDeviceManager.shared.getDeviceModelUID(deviceID: $0.id) }
+        UserDefaults.standard.wakeWordMicrophoneName = uid.isEmpty ? nil : device?.name
+
+        service.configureMicrophone(uid: uid, modelUID: modelUID)
     }
 
     /// Toggle wake word listening on/off

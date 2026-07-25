@@ -6,6 +6,9 @@ extension UserDefaults {
         static let selectedAudioDeviceUID = "selectedAudioDeviceUID"
         static let selectedAudioDeviceModelUID = "selectedAudioDeviceModelUID"
         static let prioritizedDevices = "prioritizedDevices"
+        static let wakeWordMicrophoneUID = "wakeWordMicrophoneUID"
+        static let wakeWordMicrophoneModelUID = "wakeWordMicrophoneModelUID"
+        static let wakeWordMicrophoneName = "wakeWordMicrophoneName"
         static let affiliatePromotionDismissed = "VoiceInkAffiliatePromotionDismissed"
         static let selectedLanguages = "SelectedLanguages"
 
@@ -71,6 +74,28 @@ extension UserDefaults {
     var selectedAudioDeviceModelUID: String? {
         get { string(forKey: Keys.selectedAudioDeviceModelUID) }
         set { setValue(newValue, forKey: Keys.selectedAudioDeviceModelUID) }
+    }
+
+    /// UID of the microphone the wake word detector listens on.
+    /// Empty/nil means "follow the app's recording device selection".
+    var wakeWordMicrophoneUID: String? {
+        get { string(forKey: Keys.wakeWordMicrophoneUID) }
+        set { setValue(newValue, forKey: Keys.wakeWordMicrophoneUID) }
+    }
+
+    /// Model UID of the wake word microphone. USB device UIDs embed the port's
+    /// location ID and change between ports, so this is the stable identity used
+    /// to re-find the same physical device after a replug.
+    var wakeWordMicrophoneModelUID: String? {
+        get { string(forKey: Keys.wakeWordMicrophoneModelUID) }
+        set { setValue(newValue, forKey: Keys.wakeWordMicrophoneModelUID) }
+    }
+
+    /// Display name of the wake word microphone, kept so the settings picker can
+    /// still name the device while it is unplugged.
+    var wakeWordMicrophoneName: String? {
+        get { string(forKey: Keys.wakeWordMicrophoneName) }
+        set { setValue(newValue, forKey: Keys.wakeWordMicrophoneName) }
     }
 
     var prioritizedDevicesData: Data? {

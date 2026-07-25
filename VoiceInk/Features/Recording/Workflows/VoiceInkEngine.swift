@@ -92,7 +92,17 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
     }
 
-    @Published var recordingState: RecordingState = .idle
+    @Published var recordingState: RecordingState = .idle {
+        didSet {
+            // Wake word listening resumes on the actual return to idle. The panel
+            // dismiss hook fires from inside the pipeline, while the state is still
+            // .transcribing/.enhancing, so it cannot be the only trigger.
+            guard recordingState == .idle, oldValue != .idle else { return }
+            Task { [weak self] in
+                await self?.resumeWakeWordListeningIfEnabled()
+            }
+        }
+    }
     @Published var shouldCancelRecording = false
     @Published var partialTranscript: String = ""
     var currentSession: TranscriptionSession?
@@ -108,6 +118,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
     // Wake word detection
     @Published var isWakeWordListening = false
+    /// The microphone chosen for wake word detection is not currently connected.
+    @Published var wakeWordMicrophoneUnavailable = false
+    /// Device the wake word detector is actually bound to, for settings feedback.
+    @Published var wakeWordBoundDeviceName: String?
     var wakeWordService: WakeWordListeningService?
 
     let recorder = Recorder()

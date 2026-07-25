@@ -317,6 +317,50 @@ agent can report success it did not achieve.
 commits accumulate locally and the Telegram notification carries the push command.
 Someone must push by hand periodically. Flip `ALLOW_PUSH=1` to change that.
 
+## Wake word (fork feature)
+
+`WakeWordListeningService` runs `SFSpeechRecognizer` over an `AVAudioEngine` input tap and
+posts `.toggleRecorderPanel` when it hears the wake word. Six defects were found and fixed
+in the 2026-07-25 session; the notes below are what makes the design non-obvious.
+
+**Microphone identity.** A USB device's `kAudioDevicePropertyDeviceUID` embeds the port's
+location ID (`AppleUSBAudioEngine:...:USB PnP Audio Device:2120000:2`), so it changes when
+the device moves to another port or hub. Matching on the UID alone silently loses the device.
+Everything therefore resolves through `AudioDeviceManager.findAvailableDevice(uid:modelUID:)`,
+which falls back to the stable `kAudioDevicePropertyModelUID`. The wake word settings persist
+`wakeWordMicrophoneUID` + `wakeWordMicrophoneModelUID` + `wakeWordMicrophoneName`, and
+`resolveInputDevice()` re-pins the saved UID when the device reappears under a new one.
+`getCurrentDevice()`'s `.prioritized` branch had the same UID-only bug and now uses the same
+helper — that bug is why a user can end up with the same physical mic listed three times in
+`prioritizedDevices`.
+
+**Strict device policy.** When a microphone is chosen explicitly and it is not connected, the
+detector stays idle and sets `microphoneUnavailable` instead of falling back. Falling back
+would grab the built-in or headset mic, which is exactly what the feature must not do — an
+always-open input on a Bluetooth headset also forces it into HFP and wrecks playback.
+Only "Same as Recording" (empty UID) follows `AudioDeviceManager`.
+
+**Staying alive.** A single speech recognition request is capped around a minute, so
+`scheduleRestart` cycles the session every ~50 s (jittered) instead of waiting for the error
+path, and recognition errors back off 1→2→4→…→30 s. `requiresOnDeviceRecognition` follows
+`speechRecognizer.supportsOnDeviceRecognition` — server-side recognition would rate-limit an
+always-on listener and stream the room to Apple continuously.
+
+**Restart safety.** Every start/stop bumps a `generation` token that all async continuations
+check before touching shared state, and `stopListening()` tears down unconditionally. The old
+`guard isListening` could skip teardown after a lost race and leave the engine holding the mic.
+
+**Resume after dictation.** `resumeWakeWordListeningIfEnabled()` is driven by a `didSet` on
+`VoiceInkEngine.recordingState`, not only by the panel-dismiss hook — that hook fires from
+inside the pipeline while the state is still `.transcribing`, so its `== .idle` guard always
+failed and listening never came back after the first dictation.
+
+**Startup order.** `initializeWakeWordService()` waits for `AudioDeviceManager` to publish its
+device list before auto-starting; that list arrives via `DispatchQueue.main.async`, and
+starting first bound the engine to the system default mic.
+
+Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
+
 ## Handoff
 
 Current state (2026-07-25, later session): multi-language selection was reworked — see
@@ -330,8 +374,12 @@ as a single string. The orphaned view was deleted and its toggle logic moved int
 `ModeConfigDraft.toggleLanguage`.
 
 `make local-stable` is green on arm64 **and** on the Intel path
-(`VOICEINK_TARGET_ARCH=x86_64`, verified this session), `VoiceInkTests` passes 38/38, and the
-app is installed to `/Applications/VoiceInk.app` and running from that build.
+(`VOICEINK_TARGET_ARCH=x86_64`, verified in an earlier session), `VoiceInkTests` passes 51/51,
+and the app is installed to `/Applications/VoiceInk.app` and running from that build.
+
+Run the unit tests with `-only-testing:VoiceInkTests`. A plain `test` also builds
+`VoiceInkUITests`, whose runner is rejected by Gatekeeper ("VoiceInkUITests-Runner is
+damaged") under the local unsigned build, failing the whole run for an unrelated reason.
 
 **Always build with `make local-stable`, never plain `make local`** — ad-hoc signing has no
 stable code identity, so every reinstall changes the cdhash, macOS drops its TCC grants, and
@@ -350,11 +398,14 @@ Next steps / open questions:
 - Local commits are unpushed by design — check `git log origin/main..main` and push with
   `--force-with-lease` (history is rebased, so a plain push is rejected).
 - `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
-- Wake-word mic picker was never verified at runtime: enable wake word, pick a
-  non-default mic, confirm it listens on that device.
-- Minor UX edge: if a saved `wakeWordMicrophoneUID` device is unplugged, the picker
-  renders blank (service still falls back to the app device). Could add an explicit
-  "Same as Recording" fallback when the UID is missing.
+- **Wake word still needs a runtime pass with the USB mic physically attached** (it was not
+  connected during the fix session, so only the code paths were verified). Check: the status
+  card names the bound device; unplug → "not connected" warning and the built-in mic is NOT
+  taken; replug into a *different* port → rebinds on its own; dictate three times in a row →
+  listening resumes each time; leave it 15 min silent → still triggers. Watch
+  `log stream --predicate 'subsystem == "com.prakashjoshipax.voiceink" AND category == "WakeWordListeningService"'`
+  and confirm `onDevice recognition: true` for `ru-RU` — if it logs `false`, the on-device
+  asset never downloaded and the ~1 min server cap still applies.
 - Optional cleanup: `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels/`
   still contains a junk `__MACOSX/` dir from an old unzip - safe to `rm -rf`.
 
