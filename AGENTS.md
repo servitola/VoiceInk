@@ -319,9 +319,26 @@ Someone must push by hand periodically. Flip `ALLOW_PUSH=1` to change that.
 
 ## Wake word (fork feature)
 
-`WakeWordListeningService` runs `SFSpeechRecognizer` over an `AVAudioEngine` input tap and
-posts `.toggleRecorderPanel` when it hears the wake word. Six defects were found and fixed
-in the 2026-07-25 session; the notes below are what makes the design non-obvious.
+`WakeWordListeningService` captures through `CoreAudioRecorder` and posts
+`.toggleRecorderPanel` when it hears the wake word — to start dictation, and again to finish
+it. Recognition is either a local Parakeet model gated by Silero VAD (the default, offline)
+or `SFSpeechRecognizer`. The notes below are what makes the design non-obvious.
+
+**It heard nothing at all, and that was the whole bug.** For every session before `9759d2e`
+the detector was fed pure digital silence. It used an `AVAudioEngine` input tap with the
+device bound via `inputNode.auAudioUnit.setDeviceID(...)`; against the user's USB microphone
+the engine started without error and **the tap closure was then never called once** — measured
+as `0 frames tapped, peak input level 0.0000` over a full 52 s session, while a dictation
+recorded minutes earlier on the same build and the same device peaks at 19976/32767. So it
+was never the room being quiet, never TCC, never the microphone. Capture now goes through
+`CoreAudioRecorder`, the AUHAL path that records every dictation, and the same session logs
+880770 frames at peak 0.3857. **Do not put AVAudioEngine back here.**
+
+**Keep it observable.** `lastRecognizedText` existed but was never logged and never displayed,
+so "не срабатывает" was unfalsifiable across several sessions and the bug above survived all
+of them. The detector now logs what it heard at debug level, reports frames-tapped and peak
+input level per session (and on a timer, since the local engine has no session that ends),
+and shows the last recognised text in settings. Diagnose from those before touching anything.
 
 **Microphone identity.** A USB device's `kAudioDevicePropertyDeviceUID` embeds the port's
 location ID (`AppleUSBAudioEngine:...:USB PnP Audio Device:2120000:2`), so it changes when
@@ -344,7 +361,29 @@ Only "Same as Recording" (empty UID) follows `AudioDeviceManager`.
 `scheduleRestart` cycles the session every ~50 s (jittered) instead of waiting for the error
 path, and recognition errors back off 1→2→4→…→30 s. `requiresOnDeviceRecognition` follows
 `speechRecognizer.supportsOnDeviceRecognition` — server-side recognition would rate-limit an
-always-on listener and stream the room to Apple continuously.
+always-on listener and stream the room to Apple continuously. All of this is Apple-only: a
+local model has no session that expires, so cycling it would just reload the model, and it
+has no server to fall back to. Speech Recognition authorization is likewise demanded only
+for the Apple backend, or offline detection would be blocked on a grant it never uses.
+
+**Apple Speech is unusable on this machine, and silently so.** With macOS Dictation off the
+request fails with `kLSRErrorDomain 201` and falls back to Apple's servers, and the server
+recogniser then returns **nothing at all, with no error** — 103 s of good audio (831810
+frames, peak 0.099) produced zero results. Turning on System Settings → Keyboard → Dictation
+makes it run on device. The local engine does not need any of that.
+
+**Say it again to finish.** `wakeWordStopsRecording` (default on) makes the wake word a
+toggle: the second one ends dictation through the same `.toggleRecorderPanel` notification.
+Three things fall out of it. The detector must keep the microphone through the recording, so
+`toggleRecord` and `canStartListening` both make an exception for `.recording` — and must
+give it back the instant recording ends, via the `recordingState` didSet, because its model
+would otherwise queue behind the one transcribing the dictation on the same shared
+`FluidAudioTranscriptionService` actor. A cooldown (2.5 s) is mandatory: recognisers report a
+growing utterance incrementally and the wake word is in every partial, so one spoken word
+used to fire repeatedly — harmless when a trigger only started recording, not harmless when
+the next one stops it. And `removeWakeWord` strips the closing word off the tail as well as
+the head; note its head path was rewritten to work on the trimmed text, since it used to
+re-derive everything from the original and would have discarded the tail removal.
 
 **Restart safety.** Every start/stop bumps a `generation` token that all async continuations
 check before touching shared state, and `stopListening()` tears down unconditionally. The old
@@ -359,15 +398,17 @@ failed and listening never came back after the first dictation.
 device list before auto-starting; that list arrives via `DispatchQueue.main.async`, and
 starting first bound the engine to the system default mic.
 
-**Do not reintroduce the swappable-backend refactor without solving this first.**
-An attempt to add an offline local engine (`WakeWordRecognizer` protocol +
-`LocalWakeWordRecognizer` on Silero VAD and Parakeet, commits `6a27634` / `fc8566f`,
-reverted in `c61cdc7`) made the app die whenever the main window was presented while
-the detector was capturing: `EXC_BAD_ACCESS` in `swift_task_isCurrentExecutor`,
-checking the executor for a SwiftData dynamic property (`DashboardContent`'s `@Query`),
-with no VoiceInk frame anywhere in the trace.
+**The local engine, and the crash that got the first attempt reverted.** Silero VAD (~1 MB,
+Neural Engine) gates a Parakeet TDT model, so the model runs on speech instead of on every
+second of silence: measured at ~2 % CPU and 225 MB RSS while listening. Both come from
+FluidAudio and are shared with dictation through the app's one
+`FluidAudioTranscriptionService`, so the model is loaded once, not twice.
 
-What the bisect established, by script rather than by reading code:
+The first attempt (`6a27634` / `fc8566f`) killed the app whenever the main window was
+presented while the detector captured: `EXC_BAD_ACCESS` in `swift_task_isCurrentExecutor`
+checking the executor for a SwiftData dynamic property (`DashboardContent`'s `@Query`), no
+VoiceInk frame in the trace. It was reverted in `c61cdc7`. What the bisect established, by
+script rather than by reading code:
 
 | Build | Wake word | Open main window ×6 |
 |---|---|---|
@@ -377,36 +418,60 @@ What the bisect established, by script rather than by reading code:
 | `fc8566f` | on, Apple Speech | crash on 1st |
 | `fc8566f` | on, microphone missing so no capture | 6/6 clean |
 | `fc8566f`, `syncWakeWordState` disabled | on | crash on 2nd |
+| `5d4d9f1` (restored, this design) | on, local model | 6/6 clean |
 
-So it needs live audio capture, it is independent of the recognition backend, and it
-is not the `@Published` mirroring. The fault arrived with the backend indirection in
-`6a27634`; making `LocalWakeWordRecognizer` and `FluidAudioTranscriptionService`
-actors (`fc8566f`) fixed genuine races but not this. Prime remaining suspect: the tap
-closure calling through the `any WakeWordRecognizer` existential, and the backends'
-`async` methods running off the main actor where the pre-refactor code did all of it
-inline in a `@MainActor` method. Next step is Guard Malloc
-(`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib`) on a build with the Apple backend,
-which is light enough to run under it, to catch the access at the point of corruption.
+So it needed live audio capture, was independent of the backend, and was not the `@Published`
+mirroring — a heap-corruption signature pointing at the `any WakeWordRecognizer` existential
+being called from the realtime render thread, with backends running `async` off the main actor
+where the pre-refactor code did everything inline in a `@MainActor` method.
+
+The restored engine removes both halves of that rather than diagnosing them. There is no
+protocol and no existential — `startRecognition` branches on the engine kind into two concrete
+paths — and nothing runs on the realtime thread at all, because `CoreAudioRecorder` hands over
+16 kHz mono chunks from its own processing queue. `LocalWakeWordRecognizer` therefore only ever
+receives plain `[Float]`. It stays an actor: `start`/`stop` arrive from the main actor while
+the processing task mutates the same sample buffers.
+
+Guard Malloc was never needed. Reproduce with `scripts/wake-word-crash-repro.sh` (kept this
+time). Independent confirmation: every VoiceInk crash report on 2026-07-25 is from 21:59–22:31,
+i.e. the reverted builds, and none after.
+
+**Startup serialisation.** Three callers race at launch — auto-start, device-list arrival and
+the idle-state hook. Each got past the `isListening` check while the others awaited, and the
+log showed two `Local wake word recognizer started` lines for one start: two models loaded and
+two capture sessions opened, with the generation token cleaning up only afterwards. Starts are
+chained through `startTask`.
 
 Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
 
-Current state (2026-07-25, wake-word session): the app is installed, running and stable
-at `780f957`. Wake word is enabled and verified bound to the user's USB microphone
-(`Wake word listening on device 114 'USB PnP Audio Device'`), which is the original
-complaint and is now fixed — see the **Wake word (fork feature)** section for why the
-USB UID kept moving and how `modelUID` solves it.
+Current state (2026-07-25, second wake-word session): **wake word works, offline, and has
+been observed firing on the spoken word** — which every previous session ended without ever
+seeing. Installed and running at `7b3f1e1`.
 
-Recognition currently falls back to **Apple's servers**, and the user does not want that.
-The cause is measured, not guessed: `Siri and Dictation are disabled [kLSRErrorDomain 201]`,
-because macOS Dictation is off. Turning on System Settings → Keyboard → Dictation (with
-Russian) makes Apple's recognizer run on device and closes the privacy issue with one
-toggle. **The user has been asked to do this and has not confirmed yet — check first.**
+```
+heard: лошадка.       -> 🎯 Wake word detected
+heard: ваша лошадка.  -> 🎯 Wake word detected
+```
 
-An offline local engine (Silero VAD gating Parakeet) was built and then **reverted**
-(`c61cdc7`) because it crashed the app; the evidence table is in the wake-word section.
-The code is intact in `6a27634` and easy to restore once the crash is understood.
+Local Parakeet on the user's USB microphone, `engine: localModel, onDevice recognition: true`,
+nothing leaving the machine, listening resuming after each dictation. Saying the word again
+finishes dictation and pastes, the same as pressing the shortcut twice.
+
+The reason it never fired was not the recogniser and not the microphone selection fixed in
+the previous session: the `AVAudioEngine` tap was **never called at all**, so the detector
+was fed digital silence. Capture moved to `CoreAudioRecorder`. Full evidence in the wake word
+section — read it before touching the capture path.
+
+Apple Speech remains configurable but is a dead end here until macOS Dictation is enabled;
+with it off the server recogniser returns nothing at all, silently. The local engine is the
+default and needs none of it. The user's Speech Recognition grant was reset with `tccutil`
+during this session (they had accidentally dismissed a prompt), so macOS will ask again if
+they ever switch to the Apple backend.
+
+The crash that caused the `c61cdc7` revert does not reproduce with the restored design:
+`scripts/wake-word-crash-repro.sh` is 6/6 clean, and no crash report exists after 22:31.
 
 Earlier in the day (same session): multi-language selection was reworked — see
 the **Language selection (fork feature)** section above for the design and the Parakeet
@@ -443,24 +508,21 @@ Next steps / open questions:
 - Local commits are unpushed by design — check `git log origin/main..main` and push with
   `--force-with-lease` (history is rebased, so a plain push is rejected).
 - `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
-- **Next task, if the user still wants offline detection: find the crash from `6a27634`.**
-  The measured facts and the reproduction script are in the wake-word section. Do not
-  re-derive them, and do not reinstall that build on the user's machine while hunting —
-  it kills the app on the first window open. Start with Guard Malloc on the Apple backend.
-- **Never verified: whether the wake word actually fires on the spoken word.** Every session
-  so far ended before that could be observed. Say "лошадка" and watch
-  `log stream --predicate 'subsystem == "com.prakashjoshipax.voiceink" AND category == "WakeWordListeningService"'`
-  for `🎯 Wake word detected`. Also still unverified: unplug → "not connected" warning with
-  the built-in mic NOT taken; replug into a *different* port → rebinds by itself; three
-  dictations in a row → listening resumes each time.
+- **Not verified end to end: the full toggle round trip.** Starting by voice and firing on
+  the spoken word are both observed. Not yet watched from start to finish: say "лошадка",
+  dictate, say "лошадка", and confirm the text lands in the field *without* either wake word
+  in it. The tail-stripping has unit tests (`TrailingWakeWordRemovalTests`) but no live run.
+- Also unverified, carried over: unplug → "not connected" warning with the built-in mic NOT
+  taken; replug into a *different* port → rebinds by itself.
+- Worth watching now that the detector holds the microphone through a recording: two AUHAL
+  clients on the same device at once (its `CoreAudioRecorder` plus the dictation one). It
+  built and ran, but no one has yet confirmed the dictation audio is unaffected.
+- Parakeet transcribes any speech the VAD lets through, including audio from the speakers —
+  seen in the log during testing. No false triggers were produced, but a wake word that is a
+  common word would behave much worse than "лошадка".
 - The user's `prioritizedDevices` still lists the same physical USB mic three times under
   three UIDs, a manual workaround for the bug `daf5f7e` fixed in `getCurrentDevice()`.
   Two of those entries can now be deleted — worth offering.
-- Diagnostic residue to be aware of: this session wrote `wakeWordMicrophoneUID`,
-  `wakeWordMicrophoneModelUID` and `wakeWordMicrophoneName` directly via `defaults` while
-  narrowing the crash, and briefly toggled `isWakeWordEnabled` and `wakeWordEngine`. The
-  values were restored to the USB microphone and verified in the log, but `wakeWordEngine`
-  is left over from the reverted feature and is now simply ignored.
 - Optional cleanup: `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels/`
   still contains a junk `__MACOSX/` dir from an old unzip - safe to `rm -rf`.
 
