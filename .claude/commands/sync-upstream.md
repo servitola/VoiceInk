@@ -18,7 +18,7 @@ and fix — do not push.
 Derive the branch instead of hardcoding:
 
 ```bash
-cd ~/projects/voiceink
+cd /Volumes/SanDisk/projects/voiceink
 BR=$(git branch --show-current)          # normally "main"
 echo "working branch: $BR"
 ```
@@ -138,19 +138,44 @@ grep -m2 -E "MARKETING_VERSION|CURRENT_PROJECT_VERSION" VoiceInk.xcodeproj/proje
 # sed -i '' 's/MARKETING_VERSION = 1.70;/MARKETING_VERSION = 1.71;/g; s/CURRENT_PROJECT_VERSION = 170;/CURRENT_PROJECT_VERSION = 171;/g' VoiceInk.xcodeproj/project.pbxproj
 ```
 
-### 6. Build + install locally — use `make local`, NOT `make build`
+### 6. Build + install locally — use `make local-stable`, NOT `make build`
 
 **Do not use `make build` + rsync for the installed app.** That produces a Debug build
 with the default entitlements (CloudKit enabled) which, when ad-hoc signed, **SIGTRAPs on
-launch inside `NSCloudKitMirroringDelegate`** — the app appears to "not start". `make local`
-compiles with `LOCAL_BUILD` (SwiftData CloudKit → `.none`) + `VoiceInk.local.entitlements`,
-signs stably (TCC permissions persist), installs to `/Applications`, and adds the
+launch inside `NSCloudKitMirroringDelegate`** — the app appears to "not start". The `local`
+family compiles with `LOCAL_BUILD` (SwiftData CloudKit → `.none`) +
+`VoiceInk.local.entitlements`, installs to `/Applications`, and adds the
 `libwhisper.1.dylib` rpath symlink.
 
+**Use `local-stable`, not plain `local`.** `make local` defaults to
+`LOCAL_SIGN_IDENTITY = -` (ad-hoc), and an ad-hoc signature has no stable code identity:
+every reinstall produces a new cdhash, so macOS treats the app as a *different* app and
+**silently drops its TCC grants** — Accessibility / Input Monitoring / Microphone. The
+symptom is nasty because the app still launches fine, it just stops reacting to the
+recording hotkey. `make local-stable` signs with the self-signed `VoiceInk Local Signing`
+identity instead, so permissions survive every rebuild (granted once, by hand).
+
 ```bash
-cd ~/projects/voiceink
-make local
+cd /Volumes/SanDisk/projects/voiceink
+make local-stable
 ```
+
+Expect `Using signing identity: <sha1>` in the output, and afterwards
+`codesign -dv /Applications/VoiceInk.app` must report
+`Authority=VoiceInk Local Signing` — **never** `Signature=adhoc`.
+
+If it aborts with `Failed to locate 'VoiceInk Local Signing' in keychain`, or codesign
+fails on a cert that exists, the keychain holds a **certificate without its private key**
+(`security find-certificate` finds it, `security find-identity -p codesigning` does not).
+Delete the orphan and recreate it:
+
+```bash
+security delete-certificate -c "VoiceInk Local Signing" ~/Library/Keychains/login.keychain-db
+./scripts/create-local-signing-cert.sh
+security find-identity -p codesigning | grep "VoiceInk Local"   # must list it
+```
+
+`CSSMERR_TP_NOT_TRUSTED` next to it is expected and fine for a self-signed cert.
 
 Expect `** BUILD SUCCEEDED **` and `Build complete! App installed to: /Applications/VoiceInk.app`.
 If it fails on missing whisper headers/dylib, see the **whisper rebuild** appendix.
@@ -203,8 +228,8 @@ If it isn't running, inspect the newest crash report and fix before proceeding:
 ```bash
 CR=$(ls -t ~/Library/Logs/DiagnosticReports/VoiceInk*.ips | head -1)
 python3 -c "import json,sys;raw=open('$CR').read().split(chr(10),1);b=json.loads(raw[1]);print(json.dumps(b.get('termination',{})))"
-# Common causes: 'Library not loaded: @rpath/libwhisper.1.dylib' (rebuild whisper / re-run make local),
-#                CloudKit SIGTRAP (you used make build instead of make local).
+# Common causes: 'Library not loaded: @rpath/libwhisper.1.dylib' (rebuild whisper / re-run make local-stable),
+#                CloudKit SIGTRAP (you used make build instead of make local-stable).
 ```
 
 ### 9. Push — only after build + tests + launch all passed
@@ -230,10 +255,10 @@ Should match `$UPSTREAM_MARKETING` / `$UPSTREAM_BUILD` from step 2b.
 
 ## Appendix: rebuild whisper.xcframework (only if needed)
 
-`make local`/`make build` skip whisper when `build-apple/whisper.xcframework` already
+`make local-stable`/`make build` skip whisper when `build-apple/whisper.xcframework` already
 exists. Rebuild only when the `libwhisper` dylib is missing from the xcframework or the
 app crashes with `dyld: Library not loaded: @rpath/libwhisper.1.dylib` even after
-re-running `make local`.
+re-running `make local-stable`.
 
 ### Standard rebuild
 
