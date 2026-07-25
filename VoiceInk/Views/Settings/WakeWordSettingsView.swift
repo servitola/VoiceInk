@@ -307,6 +307,20 @@ struct WakeWordSettingsView: View {
                                 .foregroundColor(.secondary)
                         }
 
+                        // What the recogniser last produced. Without this the only
+                        // symptom of a broken detector is silence, which looks
+                        // identical whether the microphone, the recogniser or the
+                        // word matching is at fault.
+                        if voiceInkEngine.isWakeWordListening {
+                            Text(voiceInkEngine.wakeWordLastRecognizedText.isEmpty
+                                 ? String(localized: "Heard: nothing yet")
+                                 : String(format: String(localized: "Heard: %@"), voiceInkEngine.wakeWordLastRecognizedText))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.head)
+                        }
+
                         if let failure = voiceInkEngine.wakeWordFailureMessage {
                             Text(failure)
                                 .font(.caption)

@@ -1,4 +1,6 @@
 import AVFoundation
+import Accelerate
+import Atomics
 import CoreAudio
 import Foundation
 import Speech
@@ -13,7 +15,12 @@ class WakeWordListeningService: NSObject, ObservableObject {
     @Published var isListening = false {
         didSet { if oldValue != isListening { onStateChanged?() } }
     }
-    @Published var lastRecognizedText = ""
+    /// The most recent transcription the recogniser produced. Surfaced in the
+    /// wake word settings so "it never fires" can be told apart from "it never
+    /// hears anything" without attaching a debugger.
+    @Published var lastRecognizedText = "" {
+        didSet { if oldValue != lastRecognizedText { onStateChanged?() } }
+    }
     @Published var permissionStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
     /// True when the explicitly configured microphone is not currently connected.
     /// Listening stays paused in that case instead of falling back to another device.
@@ -46,7 +53,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var audioEngine: AVAudioEngine?
+    private var capture: CoreAudioRecorder?
     private var boundDeviceID: AudioDeviceID?
     private var deviceChangeObserver: NSObjectProtocol?
 
@@ -69,6 +76,18 @@ class WakeWordListeningService: NSObject, ObservableObject {
     /// so the next attempt goes through the server instead of failing forever.
     private var onDeviceRecognitionDisabled = false
     private let immediateFailureThreshold: TimeInterval = 15
+
+    /// Loudest sample the tap has seen since the current session started, held as
+    /// a `Float` bit pattern. Written from the realtime audio thread, so it is
+    /// lock-free rather than actor-isolated, and read once per teardown. A
+    /// session that ends with a peak of zero means the microphone delivered
+    /// silence, which is a completely different fault from a recogniser that
+    /// returns nothing.
+    private let sessionInputPeakBits = ManagedAtomic<UInt32>(Float(0).bitPattern)
+    /// Frames the tap actually delivered this session. Zero peak with zero frames
+    /// is a dead audio graph; zero peak with millions of frames is a muted or
+    /// permission-denied microphone. The two have completely different fixes.
+    private let sessionInputFrames = ManagedAtomic<UInt64>(0)
 
     private var wakeWord: String = "лошадка"
     private var language: String = "ru-RU"
@@ -263,14 +282,28 @@ class WakeWordListeningService: NSObject, ObservableObject {
         recognitionTask?.cancel()
         recognitionTask = nil
 
-        if let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        if let capture {
+            // Drop the callback first: teardown drains the processing queue, and
+            // a chunk delivered after the request ends is wasted work at best.
+            capture.onAudioChunk = nil
+            capture.teardown()
         }
-        audioEngine = nil
+        capture = nil
 
         recognitionRequest?.endAudio()
         recognitionRequest = nil
+
+        // Report what the microphone actually delivered this session before the
+        // counter is reset. A peak of 0 over a whole session means the tap saw
+        // pure silence - a microphone or permission problem, not a recognition one.
+        if let started = sessionStartedAt {
+            let peak = Float(bitPattern: sessionInputPeakBits.exchange(Float(0).bitPattern, ordering: .relaxed))
+            let frames = sessionInputFrames.exchange(0, ordering: .relaxed)
+            let lifetime = Date().timeIntervalSince(started)
+            logger.notice(
+                "Session ended after \(String(format: "%.1f", lifetime), privacy: .public)s, \(frames, privacy: .public) frames tapped, peak input level \(String(format: "%.4f", peak), privacy: .public)"
+            )
+        }
 
         recognizedTextBuffer.removeAll()
         boundDeviceID = nil
@@ -280,6 +313,51 @@ class WakeWordListeningService: NSObject, ObservableObject {
         if isListening {
             isListening = false
             logger.notice("Wake word listening stopped")
+        }
+    }
+
+    /// Format the capture path delivers: 16 kHz mono, which is also what the
+    /// local wake word models expect.
+    nonisolated private static let captureFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 16000,
+        channels: 1,
+        interleaved: false
+    )
+
+    /// Wraps a 16 kHz mono Int16 chunk as a float buffer for the recognizer.
+    nonisolated private static func makeFloatBuffer(fromInt16 data: Data) -> AVAudioPCMBuffer? {
+        let sampleCount = data.count / MemoryLayout<Int16>.size
+        guard sampleCount > 0,
+            let format = captureFormat,
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(sampleCount)),
+            let destination = buffer.floatChannelData?[0]
+        else { return nil }
+
+        buffer.frameLength = AVAudioFrameCount(sampleCount)
+        data.withUnsafeBytes { raw in
+            guard let source = raw.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }
+            // vDSP writes the whole buffer in one pass instead of per-sample Swift.
+            vDSP_vflt16(source, 1, destination, 1, vDSP_Length(sampleCount))
+            var scale: Float = 1.0 / 32768.0
+            vDSP_vsmul(destination, 1, &scale, destination, 1, vDSP_Length(sampleCount))
+        }
+        return buffer
+    }
+
+    /// Raises `storage` to `value` if `value` is larger. Called from the audio
+    /// thread, so it is `nonisolated` and does no allocation.
+    nonisolated private static func recordPeak(_ value: Float, into storage: ManagedAtomic<UInt32>) {
+        var current = storage.load(ordering: .relaxed)
+        while Float(bitPattern: current) < value {
+            let (exchanged, seen) = storage.compareExchange(
+                expected: current,
+                desired: value.bitPattern,
+                ordering: .relaxed
+            )
+            if exchanged { return }
+            current = seen
         }
     }
 
@@ -306,31 +384,17 @@ class WakeWordListeningService: NSObject, ObservableObject {
             throw WakeWordError.microphoneUnavailable
         }
 
-        // Create audio engine
-        let audioEngine = AVAudioEngine()
-        let inputNode = audioEngine.inputNode
-
-        // Bind to the selected microphone instead of the system default one.
-        // Must happen before querying the format / installing the tap.
-        // On macOS the input and output nodes share one AUHAL, so this also moves
-        // system output if anything is ever connected to audioEngine.outputNode -
-        // keep this engine input-only.
-        do {
-            try inputNode.auAudioUnit.setDeviceID(device.id)
-        } catch {
-            logger.error("Failed to set wake word input device: \(error.localizedDescription)")
-            microphoneUnavailable = true
-            boundDeviceName = nil
-            throw WakeWordError.audioEngineFailure
-        }
-
-        // Read the format only after the device is bound - it describes that device.
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        guard recordingFormat.channelCount > 0, recordingFormat.sampleRate > 0 else {
-            // installTap raises an uncatchable exception on a degenerate format.
-            logger.error("Invalid input format for wake word device \(device.id, privacy: .public)")
-            throw WakeWordError.audioEngineFailure
-        }
+        // Capture through the same AUHAL recorder the main dictation path uses.
+        //
+        // This was an AVAudioEngine input tap until it was measured delivering
+        // zero frames for a whole session against a USB microphone bound with
+        // `auAudioUnit.setDeviceID` - the engine started without error and the
+        // tap was simply never called, so the detector heard literal digital
+        // silence and could never fire. CoreAudioRecorder drives the device
+        // directly, is what records every dictation on this machine, and already
+        // hands 16 kHz mono PCM off the realtime thread through its own
+        // lock-free queue.
+        let capture = CoreAudioRecorder()
 
         // Create recognition request
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -344,29 +408,45 @@ class WakeWordListeningService: NSObject, ObservableObject {
         let useOnDevice = speechRecognizer.supportsOnDeviceRecognition && !onDeviceRecognitionDisabled
         request.requiresOnDeviceRecognition = useOnDevice
 
-        // The tap runs on a realtime audio thread, so it captures the request
-        // directly and never touches actor-isolated state.
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+        // Chunks arrive on the recorder's processing queue, already downmixed to
+        // 16 kHz mono - not on the realtime render thread - so allocating a
+        // buffer here is fine. Nothing actor-isolated is touched.
+        let peakBits = sessionInputPeakBits
+        let frameCount = sessionInputFrames
+        peakBits.store(Float(0).bitPattern, ordering: .relaxed)
+        frameCount.store(0, ordering: .relaxed)
+        capture.onAudioChunk = { data in
+            guard let buffer = Self.makeFloatBuffer(fromInt16: data) else { return }
             request.append(buffer)
+
+            // Diagnostic: separates a dead audio graph from a silent microphone.
+            frameCount.wrappingIncrement(by: UInt64(buffer.frameLength), ordering: .relaxed)
+            if buffer.frameLength > 0, let samples = buffer.floatChannelData?[0] {
+                var peak: Float = 0
+                vDSP_maxmgv(samples, 1, &peak, vDSP_Length(buffer.frameLength))
+                Self.recordPeak(peak, into: peakBits)
+            }
         }
 
-        // Start audio engine
-        audioEngine.prepare()
         do {
-            try audioEngine.start()
+            try capture.startCapture(deviceID: device.id)
         } catch {
-            inputNode.removeTap(onBus: 0)
-            throw error
+            logger.error("Failed to capture from wake word device \(device.id, privacy: .public): \(error.localizedDescription)")
+            capture.onAudioChunk = nil
+            capture.teardown()
+            microphoneUnavailable = true
+            boundDeviceName = nil
+            throw WakeWordError.audioEngineFailure
         }
 
         guard myGeneration == generation else {
-            inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
+            capture.onAudioChunk = nil
+            capture.teardown()
             request.endAudio()
             return
         }
 
-        self.audioEngine = audioEngine
+        self.capture = capture
         self.recognitionRequest = request
         self.boundDeviceID = device.id
         self.boundDeviceName = device.name
@@ -520,6 +600,8 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
         let transcription = result.bestTranscription.formattedString.lowercased()
         lastRecognizedText = transcription
+        // Debug level, so it costs nothing until someone runs `log stream`.
+        logger.debug("heard: \(transcription, privacy: .public)")
 
         // Add to buffer
         recognizedTextBuffer.append(transcription)
@@ -611,9 +693,9 @@ class WakeWordListeningService: NSObject, ObservableObject {
     deinit {
         pendingRestartTask?.cancel()
         recognitionTask?.cancel()
-        if let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        if let capture {
+            capture.onAudioChunk = nil
+            capture.teardown()
         }
         recognitionRequest?.endAudio()
         if let observer = deviceChangeObserver {
