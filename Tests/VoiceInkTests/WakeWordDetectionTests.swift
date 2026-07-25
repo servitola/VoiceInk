@@ -89,6 +89,22 @@ struct TrailingWakeWordRemovalTests {
     @Test func handlesEmptyInput() {
         #expect(strip("") == "")
     }
+
+    /// `bool(forKey:)` answers false for a key that was never written, and
+    /// `@AppStorage`'s default does not write it. That silently disabled wake
+    /// word removal for everyone who left the settings toggle alone, while the
+    /// UI showed it as on.
+    @Test func removalIsOnUntilItIsExplicitlyTurnedOff() {
+        let defaults = UserDefaults.standard
+        let original = defaults.object(forKey: "removeWakeWordFromTranscription")
+        defer { defaults.setValue(original, forKey: "removeWakeWordFromTranscription") }
+
+        defaults.removeObject(forKey: "removeWakeWordFromTranscription")
+        #expect(defaults.removeWakeWordFromTranscription)
+
+        defaults.removeWakeWordFromTranscription = false
+        #expect(!defaults.removeWakeWordFromTranscription)
+    }
 }
 
 @MainActor
