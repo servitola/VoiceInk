@@ -85,6 +85,7 @@ extension VoiceInkEngine {
         wakeWordBoundDeviceName = service.boundDeviceName
         wakeWordFailureMessage = service.failureMessage
         wakeWordUsingServerRecognition = service.usingServerRecognition
+        wakeWordLastRecognizedText = service.lastRecognizedText
     }
 
     /// Handle wake word detection - trigger recording
