@@ -9,8 +9,6 @@ extension UserDefaults {
         static let wakeWordMicrophoneUID = "wakeWordMicrophoneUID"
         static let wakeWordMicrophoneModelUID = "wakeWordMicrophoneModelUID"
         static let wakeWordMicrophoneName = "wakeWordMicrophoneName"
-        static let wakeWordEngine = "wakeWordEngine"
-        static let wakeWordModelName = "wakeWordModelName"
         static let affiliatePromotionDismissed = "VoiceInkAffiliatePromotionDismissed"
         static let selectedLanguages = "SelectedLanguages"
 
@@ -98,18 +96,6 @@ extension UserDefaults {
     var wakeWordMicrophoneName: String? {
         get { string(forKey: Keys.wakeWordMicrophoneName) }
         set { setValue(newValue, forKey: Keys.wakeWordMicrophoneName) }
-    }
-
-    /// Which recognition backend the wake word detector uses.
-    var wakeWordEngine: String? {
-        get { string(forKey: Keys.wakeWordEngine) }
-        set { setValue(newValue, forKey: Keys.wakeWordEngine) }
-    }
-
-    /// Transcription model used when the wake word engine is the local one.
-    var wakeWordModelName: String? {
-        get { string(forKey: Keys.wakeWordModelName) }
-        set { setValue(newValue, forKey: Keys.wakeWordModelName) }
     }
 
     var prioritizedDevicesData: Data? {
