@@ -89,7 +89,7 @@ git log --oneline github.com/main..$BR
 
 Custom features that must survive (as of this writing):
 - **remove trials/buying** — LicenseViewModel/ContentView/LicenseManagementView/MetricsView: no paywall, always licensed.
-- **select multiple languages** — UserDefaultsManager/LanguageSelectionView/LibWhisper/WhisperPrompt: `selectedLanguages` set.
+- **select multiple languages** — per-Mode `ModeConfig.selectedLanguages: [String]` (singular `selectedLanguage` is a computed facade over it), multi-select `Menu` in `ModeConfigFormView.multiLanguagePicker`, reductions in `TranscriptionLanguageSupport.validLanguagesOrFallback`/`singleLanguage`, `languages` on `TranscriptionRequestContext`, `WhisperContext.setLanguages` + `WhisperPrompt.combinedPrompt(for:)`, and the script reduction in `FluidAudioModelManager.languageHint(from:for:)`. Tests: `VoiceInkTests/TranscriptionLanguageSelectionTests.swift`. (The old orphaned `LanguageSelectionView` was deleted — if a rebase resurrects it, drop it again.)
 - **wake word engine** — TranscriptionOutputFilter/WakeWordListeningService/WakeWordSettingsView/WhisperState+WakeWord + `WAKE_WORD_PLAN.md`.
 - **CLI bridge** — `CLIBridgeService`, wired in `VoiceInk.swift`; `make cli` / `VoiceInkCLI`.
 - **WordReplacement unicode fix + tests** — `applyReplacements(to:rules:)` pure transform + `VoiceInkTests/WordReplacementServiceTests.swift`.
