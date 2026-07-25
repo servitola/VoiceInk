@@ -903,11 +903,26 @@ class WakeWordListeningService: NSObject, ObservableObject {
         // Clear buffer to prevent immediate re-triggering
         recognizedTextBuffer.removeAll()
         lastDetectionAt = Date()
+        lastRecognizedText = ""
 
         // When the word also ends dictation, the detector has to keep the
         // microphone through the recording - stopping here is what makes the
         // second "лошадка" impossible to hear.
         guard !stopsRecording else {
+            // Forget the audio and the transcript that triggered this, or the
+            // word keeps reappearing in every later result and stops the
+            // dictation it just started. Clearing `recognizedTextBuffer` above
+            // is not enough: both backends keep reporting a growing utterance
+            // from its beginning, so the word comes straight back.
+            if let localRecognizer {
+                Task { await localRecognizer.consumeSegment() }
+            }
+            if recognitionRequest != nil {
+                // Apple's request accumulates one transcript for the whole
+                // ~50 s session, and there is no way to truncate it - only a
+                // fresh session forgets the word.
+                scheduleRestart(after: 1, reason: "wake word consumed")
+            }
             onWakeWordDetected?()
             return
         }
