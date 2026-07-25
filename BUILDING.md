@@ -31,6 +31,23 @@ signing identity. Stable signing lets macOS retain microphone, Accessibility,
 screen-recording, Input Monitoring, and Apple Events permissions across
 rebuilds.
 
+Prefer `make local-stable` for daily use. `make local` defaults to ad-hoc
+signing (`LOCAL_SIGN_IDENTITY=-`), which gives each reinstall a new code
+identity and can silently discard those privacy grants. The app may still
+launch normally but stop responding to its recording hotkey.
+
+`make local-stable` creates `VoiceInk Local Signing` in the login keychain via
+`scripts/create-local-signing-cert.sh`. Verify the installed app after building:
+
+```bash
+codesign -dv --verbose=2 /Applications/VoiceInk.app 2>&1 | grep Authority
+# want: Authority=VoiceInk Local Signing (never: Signature=adhoc)
+```
+
+`CSSMERR_TP_NOT_TRUSTED` beside this identity in
+`security find-identity -p codesigning` is expected: the certificate is
+self-signed and intended only for this machine.
+
 Use `make local` instead for an ad-hoc-signed build. Ad-hoc builds may require
 macOS permissions again after every rebuild.
 
