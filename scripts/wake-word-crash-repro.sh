@@ -30,15 +30,23 @@ sleep 2
 open "$APP"
 
 # The detector waits for AudioDeviceManager to publish its device list before it
-# binds, so give it time to actually hold the microphone. Testing before capture
+# binds, so wait until it actually holds the microphone. Testing before capture
 # starts is how you get a false pass: the bisect showed a build with the
 # microphone missing was clean 6/6 while the same build crashed with it present.
+#
+# One `log stream` into a file, not `log show` in a loop - each `log show` scans
+# the whole store and takes seconds, which made this wait outlast the test.
 echo "==> Waiting for wake word capture to start"
+STREAM_LOG=$(mktemp -t wakeword-repro)
+log stream --predicate 'subsystem == "com.prakashjoshipax.voiceink" AND category == "WakeWordListeningService"' \
+    --level debug --style compact > "$STREAM_LOG" 2>&1 &
+STREAM_PID=$!
+trap 'kill $STREAM_PID 2>/dev/null; rm -f "$STREAM_LOG"' EXIT
+
 CAPTURING=0
-for _ in $(seq 1 20); do
+for _ in $(seq 1 30); do
     sleep 1
-    if log show --last 30s --predicate 'subsystem == "com.prakashjoshipax.voiceink" AND category == "WakeWordListeningService"' --level debug 2>/dev/null \
-        | grep -q "Wake word listening on device"; then
+    if grep -q "Wake word listening on device" "$STREAM_LOG" 2>/dev/null; then
         CAPTURING=1
         break
     fi
