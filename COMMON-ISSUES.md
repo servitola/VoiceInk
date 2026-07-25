@@ -289,6 +289,53 @@ ls -lh VoiceInk/Resources/models/
 
 ---
 
+### 12b. Hotkey Silently Stops Working After a Local Rebuild
+
+**Likelihood**: Every rebuild, if you build with `make local` instead of `make local-stable`
+
+**Symptoms**:
+- The app launches normally and looks completely healthy — no crash, no error dialog
+- Pressing the recording hotkey does **nothing at all**
+- `pgrep -x VoiceInk` shows the process alive, so it reads like a hotkey bug, not a permissions bug
+- Started right after a rebuild / reinstall (including an automated nightly one)
+
+**Why it happens**: `make local` defaults to `LOCAL_SIGN_IDENTITY = -` (ad-hoc signing). An ad-hoc signature has no stable code identity, so each reinstall produces a new cdhash. macOS keys TCC grants to that identity, so it treats the rebuilt bundle as a *different* app and drops Accessibility / Input Monitoring / Microphone. The hotkey needs Accessibility (and Input Monitoring for hold-to-talk / hybrid mode), so it goes dead while everything else looks fine.
+
+**Solution** — fix the cause, then re-grant once:
+
+```bash
+# 1. Rebuild with a stable self-signed identity
+make local-stable
+
+# 2. Confirm the bundle is no longer ad-hoc
+codesign -dv --verbose=2 /Applications/VoiceInk.app 2>&1 | grep Authority
+#    want: Authority=VoiceInk Local Signing
+
+# 3. Re-grant once — remove the stale entry first, it points at the OLD signature
+#    System Settings → Privacy & Security → Accessibility      (− then +)
+#                                        → Input Monitoring    (− then +)
+#                                        → Microphone          (toggle on)
+# 4. Relaunch VoiceInk
+```
+
+After this, permissions persist across future rebuilds.
+
+**If `make local-stable` itself fails** with `Failed to locate 'VoiceInk Local Signing' in keychain`, or codesign fails on a certificate that clearly exists, the keychain is holding a **certificate whose private key is missing** — a cert alone is not a signing identity:
+
+```bash
+security find-certificate -c "VoiceInk Local Signing" >/dev/null && echo "cert exists"
+security find-identity -p codesigning | grep "VoiceInk Local" || echo "but NOT a usable identity"
+
+# Delete the orphan and recreate it properly
+security delete-certificate -c "VoiceInk Local Signing" ~/Library/Keychains/login.keychain-db
+./scripts/create-local-signing-cert.sh
+security find-identity -p codesigning | grep "VoiceInk Local"   # must now list it
+```
+
+Note that `make local-stable` looks the certificate up with `security find-certificate`, which finds an orphaned cert too — that is why a broken keychain entry produces a confusing signing failure rather than a clear "missing identity" message.
+
+---
+
 ### 13. AppleScript/Automation Permissions for Browser Integration
 
 **Likelihood**: High when using Power Mode with browser detection
