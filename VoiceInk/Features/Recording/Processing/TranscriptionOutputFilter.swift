@@ -55,6 +55,13 @@ struct TranscriptionOutputFilter {
 
         let wakeWord = UserDefaults.standard.string(forKey: "wakeWord") ?? "лошадка"
 
+        // When the word also ends dictation it is spoken twice, so the closing
+        // one is in the recording too and has to come off the tail as well.
+        // Everything below works on this result, not on the original text.
+        let text = UserDefaults.standard.wakeWordStopsRecording
+            ? removeTrailingWakeWord(from: text, wakeWord: wakeWord)
+            : text
+
         var filteredText = text
         let normalizedText = text.lowercased()
         let normalizedWakeWord = wakeWord.lowercased()
@@ -97,6 +104,44 @@ struct TranscriptionOutputFilter {
         }
 
         return filteredText
+    }
+
+    /// Drops a wake word spoken at the end to finish dictation.
+    ///
+    /// Only the last word is considered, and only when it matches: a sentence
+    /// that genuinely ends in the wake word is indistinguishable from the stop
+    /// command, and dropping it is the right call either way, because the user
+    /// did just stop the recording with it.
+    static func removeTrailingWakeWord(from text: String, wakeWord: String) -> String {
+        let words = text.split(separator: " ", omittingEmptySubsequences: true)
+        guard let last = words.last else { return text }
+
+        let normalizedLast = last.lowercased()
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        let normalizedWakeWord = wakeWord.lowercased()
+        guard !normalizedLast.isEmpty, !normalizedWakeWord.isEmpty else { return text }
+
+        guard normalizedLast == normalizedWakeWord
+            || levenshteinDistance(normalizedLast, normalizedWakeWord) <= 2
+        else { return text }
+
+        let remainder = words.dropLast().joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        logger.notice("🎯 Closing wake word '\(wakeWord)' removed from transcription")
+
+        // A lone wake word means the recording held nothing else - the user
+        // started and stopped without saying anything in between.
+        guard !remainder.isEmpty else { return "" }
+
+        // The sentence lost its final word, so restore terminal punctuation the
+        // wake word was carrying, if any.
+        if let tail = last.last, ".!?…".contains(tail),
+            let existing = remainder.last, !".!?…,;:".contains(existing)
+        {
+            return remainder + String(tail)
+        }
+        return remainder
     }
 
     /// Calculate Levenshtein distance between two strings for fuzzy matching
