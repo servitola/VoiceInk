@@ -43,7 +43,7 @@ struct TranscriptionOutputFilter {
     /// Remove wake word from the beginning of transcription if enabled
     static func removeWakeWord(from text: String) -> String {
         // Check if wake word removal is enabled
-        guard UserDefaults.standard.bool(forKey: "removeWakeWordFromTranscription") else {
+        guard UserDefaults.standard.removeWakeWordFromTranscription else {
             return text
         }
 
