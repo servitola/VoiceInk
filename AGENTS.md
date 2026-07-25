@@ -151,6 +151,32 @@ cp -L ../voiceink_dependencies/whisper.cpp/build-macos/ggml/src/libggml*.dylib /
 open -a VoiceInk
 ```
 
+## Language selection (fork feature)
+
+Language is stored **per Mode**: `ModeConfig.selectedLanguages: [String]` is the source of
+truth, and the singular `selectedLanguage` is a computed facade over its first element so the
+many single-language call sites keep working. Codable decodes both keys and encodes both, so a
+downgrade still finds a language. The multi-select `Menu` lives in
+`ModeConfigFormView.multiLanguagePicker`; it is offered only for `.whisper` and `.fluidAudio`,
+because cloud / Apple-native / streaming providers take one locale per request.
+
+Each backend reduces the set at the edge via `TranscriptionLanguageSupport`:
+`validLanguagesOrFallback` clamps a selection to the model, `singleLanguage` degrades it to
+`"auto"` for single-locale backends. Whisper consumes the whole set (auto-detect plus
+`WhisperPrompt.combinedPrompt(for:)` biasing) through `WhisperContext.setLanguages`.
+
+**Parakeet's language parameter is a script filter, not language conditioning.** FluidAudio's
+`Language` maps to a `Script` (latin / cyrillic / greek) and the v3 TDT decoder drops top-K
+tokens of other scripts; `AsrManager.transcribe` takes a single `Language?` where `nil` means
+no filtering. So `FluidAudioModelManager.languageHint(from:for:)` returns a representative
+language when the selection sits in one script and `nil` when it spans several. Consequence:
+Parakeet V3 has exactly four reachable behaviours — no filter, latin, cyrillic, greek — and
+picking `ru + en + el` is identical to auto-detect. Multi-select there expresses intent and
+drives the UI; it cannot improve accuracy on a mixed-script selection. Real per-language
+restriction would need a fork of FluidAudio (pinned to upstream `FluidInference/FluidAudio@main`).
+
+Tests: `VoiceInkTests/TranscriptionLanguageSelectionTests.swift`.
+
 ## Required Code Changes After Rebase
 
 If you rebase from the original repository, ensure these changes are made:
@@ -293,30 +319,37 @@ Someone must push by hand periodically. Flip `ALLOW_PUSH=1` to change that.
 
 ## Handoff
 
-Current state (2026-07-25): fork is synced with upstream **2.0 (build 205)** and
-`origin/main` is in sync (`0 0`). History was rewritten from 27 junk commits ("1",
-"Build", "tests", "rebase fixes") into **10 clean commits** on top of upstream and
-force-pushed; the source tree was verified byte-identical to the pre-cleanup tree
-apart from two dropped build artifacts (`default.profraw`, the compiled
-`VoiceInkCLI/voiceink` binary, both now gitignored). Build, `VoiceInkTests` and the
-launch check are green, and the nightly cron ran end-to-end successfully once.
+Current state (2026-07-25, later session): multi-language selection was reworked — see
+the **Language selection (fork feature)** section above for the design and the Parakeet
+script-filter finding. Three things were wrong before this work and are now fixed:
+the multi-select `LanguageSelectionView` had **zero call sites** since upstream's AI Models
+page redesign (`8b63691`) and rendered for no model at all; local Whisper read the global
+`UserDefaults["SelectedLanguages"]` in `LibWhisper.fullTranscribe` and ignored the Mode's
+language entirely, so picking Russian silently transcribed English; and language lived only
+as a single string. The orphaned view was deleted and its toggle logic moved into
+`ModeConfigDraft.toggleLanguage`.
 
-**Always build with `make local-stable`, never plain `make local`.** `make local`
-defaults to ad-hoc signing, which has no stable code identity: every reinstall gives
-the bundle a new cdhash, so macOS drops its TCC grants and the app keeps launching
-fine while silently ignoring the recording hotkey. This bit us this session. The
-keychain also had a `VoiceInk Local Signing` certificate **without its private key**
-(visible to `find-certificate`, absent from `find-identity`), which made
-`make local-stable` itself fail confusingly — deleted and recreated. Accessibility /
-Input Monitoring / Microphone were re-granted to the new signature and the hotkey
-works. Details in `COMMON-ISSUES.md` §12b and `BUILDING.md`.
+`make local-stable` is green on arm64 **and** on the Intel path
+(`VOICEINK_TARGET_ARCH=x86_64`, verified this session), `VoiceInkTests` passes 38/38, and the
+app is installed to `/Applications/VoiceInk.app` and running from that build.
+
+**Always build with `make local-stable`, never plain `make local`** — ad-hoc signing has no
+stable code identity, so every reinstall changes the cdhash, macOS drops its TCC grants, and
+the app launches fine while silently ignoring the recording hotkey. Details in
+`COMMON-ISSUES.md` §12b and `BUILDING.md`.
 
 Next steps / open questions:
-- The cron leaves commits unpushed by design — check `git log origin/main..main`
-  every so often and push with `--force-with-lease` (history is rebased, so a plain
-  push will be rejected).
-- `dotfiles_private` has 2 unpushed commits from this work (`ece8417`, `f3a5b5c`);
-  never pushed, pending a go-ahead.
+- **Not verified at runtime**: dictate a mixed ru/en/el phrase on Parakeet V3, confirm the
+  `Languages` menu renders with the multi-script caption, and reopen the Mode after an app
+  restart to confirm the selection persisted.
+- Known limitation, deliberately out of scope: realtime Parakeet goes through
+  `StreamingTranscriptionProvider.connect(model:language:)`, which takes one locale, so a
+  same-script multi-selection (e.g. `ru + uk`) degrades to auto there while the batch path
+  keeps the cyrillic filter. No effect on mixed-script selections. Fixing it means widening
+  that protocol to `[String]` across ~10 providers.
+- Local commits are unpushed by design — check `git log origin/main..main` and push with
+  `--force-with-lease` (history is rebased, so a plain push is rejected).
+- `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
 - Wake-word mic picker was never verified at runtime: enable wake word, pick a
   non-default mic, confirm it listens on that device.
 - Minor UX edge: if a saved `wakeWordMicrophoneUID` device is unplugged, the picker
