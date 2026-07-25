@@ -8,11 +8,13 @@ class TranscriptionServiceRegistry {
     private weak var modelProvider: (any WhisperModelProvider)?
     private let modelsDirectory: URL
     private let modelContext: ModelContext
+    private let reuseLoadedWhisperContext: Bool
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "TranscriptionServiceRegistry")
 
     private(set) lazy var localTranscriptionService = WhisperTranscriptionService(
         modelsDirectory: modelsDirectory,
-        modelProvider: modelProvider
+        modelProvider: modelProvider,
+        reuseLoadedContext: reuseLoadedWhisperContext
     )
     private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
     #if swift(>=6.0) && false // NativeAppleTranscriptionService disabled - requires macOS 26 APIs
@@ -30,10 +32,16 @@ class TranscriptionServiceRegistry {
         return service
     }
 
-    init(modelProvider: any WhisperModelProvider, modelsDirectory: URL, modelContext: ModelContext) {
+    init(
+        modelProvider: any WhisperModelProvider,
+        modelsDirectory: URL,
+        modelContext: ModelContext,
+        reuseLoadedWhisperContext: Bool = true
+    ) {
         self.modelProvider = modelProvider
         self.modelsDirectory = modelsDirectory
         self.modelContext = modelContext
+        self.reuseLoadedWhisperContext = reuseLoadedWhisperContext
     }
 
     func service(for provider: ModelProvider) -> TranscriptionService {

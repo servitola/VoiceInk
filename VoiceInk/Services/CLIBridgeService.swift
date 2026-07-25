@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFoundation
 import SwiftData
 import os
 
@@ -9,8 +10,9 @@ import os
 ///
 /// Protocol:
 ///   * Request:  name `com.prakashjoshipax.VoiceInk.cli.transcribe.request`
-///               userInfo: `id` (String), `audioPath` (String),
-///                         `ephemeralLocal` (Bool, optional)
+///               userInfo: `id` (String), `audioPath` (String)
+///   * Safe request: name `com.prakashjoshipax.VoiceInk.cli.transcribe.ephemeral-local.v1`
+///               The distinct versioned name is fail-closed with older VoiceInk builds.
 ///   * Response: name `com.prakashjoshipax.VoiceInk.cli.transcribe.response.<id>`
 ///               userInfo on success: `ok=true`, `text`, `enhancedText?`, `modelName`
 ///               userInfo on failure: `ok=false`, `error`
@@ -21,29 +23,41 @@ final class CLIBridgeService {
     static let shared = CLIBridgeService()
 
     static let requestName = Notification.Name("com.prakashjoshipax.VoiceInk.cli.transcribe.request")
+    static let ephemeralLocalRequestName = Notification.Name(
+        "com.prakashjoshipax.VoiceInk.cli.transcribe.ephemeral-local.v1")
     static let readyName = Notification.Name("com.prakashjoshipax.VoiceInk.cli.ready")
     static let responseNamePrefix = "com.prakashjoshipax.VoiceInk.cli.transcribe.response."
 
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "CLIBridgeService")
     private weak var engine: VoiceInkEngine?
     private var modelContext: ModelContext?
+    private var ephemeralRegistry: TranscriptionServiceRegistry?
+    private var ephemeralInFlight = false
     private var inFlight: Set<String> = []
-    private var observer: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
 
     private init() {}
 
     func start(engine: VoiceInkEngine, modelContext: ModelContext) {
-        guard observer == nil else { return }
+        guard observers.isEmpty else { return }
         self.engine = engine
         self.modelContext = modelContext
+        self.ephemeralRegistry = TranscriptionServiceRegistry(
+            modelProvider: engine.whisperModelManager,
+            modelsDirectory: engine.whisperModelManager.modelsDirectory,
+            modelContext: modelContext,
+            reuseLoadedWhisperContext: false
+        )
 
         let center = DistributedNotificationCenter.default()
-        observer = center.addObserver(
-            forName: Self.requestName,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            self?.handleRequest(note)
+        for name in [Self.requestName, Self.ephemeralLocalRequestName] {
+            observers.append(center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                self?.handleRequest(note)
+            })
         }
 
         center.postNotificationName(Self.readyName, object: nil, userInfo: nil, deliverImmediately: true)
@@ -63,12 +77,23 @@ final class CLIBridgeService {
 
         let resolved = (audioPath as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: resolved)
-        let ephemeralLocal = (info["ephemeralLocal"] as? Bool) ?? false
+        let ephemeralLocal = notification.name == Self.ephemeralLocalRequestName
+        if ephemeralLocal && ephemeralInFlight {
+            sendResponse(id: id, result: .failure(.busy))
+            inFlight.remove(id)
+            return
+        }
+        if ephemeralLocal {
+            ephemeralInFlight = true
+        }
 
         Task { @MainActor in
             let result = await self.transcribe(audioURL: url, ephemeralLocal: ephemeralLocal)
             self.sendResponse(id: id, result: result)
             self.inFlight.remove(id)
+            if ephemeralLocal {
+                self.ephemeralInFlight = false
+            }
         }
     }
 
@@ -95,6 +120,21 @@ final class CLIBridgeService {
         let model = runtimeConfiguration.model
         if ephemeralLocal && model.provider != .whisper && model.provider != .fluidAudio {
             return .failure(.localModelRequired(model.displayName))
+        }
+        if ephemeralLocal {
+            do {
+                let values = try audioURL.resourceValues(forKeys: [.fileSizeKey])
+                if let size = values.fileSize, size > 64 * 1024 * 1024 {
+                    return .failure(.inputTooLarge)
+                }
+                let duration = try await AVURLAsset(url: audioURL).load(.duration).seconds
+                if !duration.isFinite || duration > 15 * 60 {
+                    return .failure(.durationTooLong)
+                }
+            } catch {
+                return .failure(.transcriptionFailed(
+                    "Could not inspect media: \(error.localizedDescription)"))
+            }
         }
 
         // The downstream WhisperTranscriptionService.readAudioSamples reads the
@@ -132,7 +172,10 @@ final class CLIBridgeService {
                     language: language,
                     prompt: model.provider == .whisper ? WhisperPrompt.combinedPrompt(for: languages) : nil
                 )
-                var text = try await engine.serviceRegistry.transcribe(
+                guard let ephemeralRegistry else {
+                    return .failure(.engineNotReady)
+                }
+                var text = try await ephemeralRegistry.transcribe(
                     audioURL: tempWAV,
                     model: model,
                     context: context
@@ -203,7 +246,10 @@ final class CLIBridgeService {
         case unsupportedFormat(String)
         case engineNotReady
         case noModelSelected
+        case busy
         case localModelRequired(String)
+        case inputTooLarge
+        case durationTooLong
         case transcriptionFailed(String)
 
         var errorDescription: String? {
@@ -216,8 +262,14 @@ final class CLIBridgeService {
                 return "VoiceInk engine is not ready yet"
             case .noModelSelected:
                 return "No transcription model is selected in VoiceInk"
+            case .busy:
+                return "Another ephemeral transcription is already running"
             case .localModelRequired(let modelName):
                 return "Ephemeral transcription requires a local Whisper or Parakeet model; selected: \(modelName)"
+            case .inputTooLarge:
+                return "Ephemeral transcription input exceeds 64 MiB"
+            case .durationTooLong:
+                return "Ephemeral transcription is limited to 15 minutes"
             case .transcriptionFailed(let message):
                 return "Transcription failed: \(message)"
             }

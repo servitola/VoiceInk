@@ -252,6 +252,7 @@ func importDictionary(from path: String) {
 
 let voiceInkBundleId = "com.prakashjoshipax.VoiceInk"
 let requestNotificationName = "com.prakashjoshipax.VoiceInk.cli.transcribe.request"
+let ephemeralLocalRequestNotificationName = "com.prakashjoshipax.VoiceInk.cli.transcribe.ephemeral-local.v1"
 let readyNotificationName = "com.prakashjoshipax.VoiceInk.cli.ready"
 let responseNamePrefix = "com.prakashjoshipax.VoiceInk.cli.transcribe.response."
 
@@ -314,11 +315,13 @@ func transcribe(audioPath: String, ephemeralLocal: Bool = false, timeout: TimeIn
     let center = DistributedNotificationCenter.default()
     let result = TranscriptionResult()
 
-    let userInfo: [String: Any] = [
+    let userInfo: [String: String] = [
         "id": id,
-        "audioPath": absolute,
-        "ephemeralLocal": ephemeralLocal
+        "audioPath": absolute
     ]
+    let selectedRequestNotificationName = ephemeralLocal
+        ? ephemeralLocalRequestNotificationName
+        : requestNotificationName
 
     // Tracks whether we've already posted the request (after bridge readiness).
     var requestPosted = false
@@ -327,7 +330,7 @@ func transcribe(audioPath: String, ephemeralLocal: Bool = false, timeout: TimeIn
         if requestPosted { return }
         requestPosted = true
         center.postNotificationName(
-            Notification.Name(requestNotificationName),
+            Notification.Name(selectedRequestNotificationName),
             object: nil,
             userInfo: userInfo,
             deliverImmediately: true
