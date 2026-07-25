@@ -20,11 +20,11 @@ class FluidAudioTranscriptionService: TranscriptionService {
         FluidAudioModelManager.asrVersion(for: model.name)
     }
 
-    static func languageHint(from selectedLanguage: String?, model: any TranscriptionModel) -> Language? {
+    static func languageHint(from selectedLanguages: [String], model: any TranscriptionModel) -> Language? {
         guard model.provider == .fluidAudio else {
             return nil
         }
-        return FluidAudioModelManager.languageHint(from: selectedLanguage, for: model.name)
+        return FluidAudioModelManager.languageHint(from: selectedLanguages, for: model.name)
     }
 
     private func cleanupLoadedManagers() async {
@@ -160,8 +160,10 @@ class FluidAudioTranscriptionService: TranscriptionService {
                 throw ASRError.notInitialized
             }
 
-            let compatibleLanguage = TranscriptionLanguageSupport.validLanguageOrFallback(
-                context.language,
+            // Nemotron's streaming manager takes one locale, so a multi-language pick degrades
+            // to auto-detect.
+            let compatibleLanguage = TranscriptionLanguageSupport.singleLanguage(
+                from: context.languages,
                 for: model
             )
             let languageHint = FluidAudioModelManager.nemotronLanguageHint(from: compatibleLanguage)
@@ -188,8 +190,9 @@ class FluidAudioTranscriptionService: TranscriptionService {
             throw ASRError.notInitialized
         }
 
+        // nil when the selection spans more than one script — see languageHint(from:for:).
         let languageHint = Self.languageHint(
-            from: context.language,
+            from: context.languages,
             model: model
         )
         var decoderState = TdtDecoderState.make(decoderLayers: await asrManager.decoderLayerCount)
