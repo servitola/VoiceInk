@@ -58,7 +58,8 @@ class WhisperTranscriptionService: TranscriptionService {
         let data = try readAudioSamples(audioURL)
 
         // The actor applies settings and reads the result atomically, keeping concurrent
-        // recordings/imports from overwriting each other's language, hints or output.
+        // recordings/imports from overwriting each other's languages, hints or output.
+        // It takes the mode's whole language selection from `context.languages`.
         let text: String
         do {
             text = try await whisperContext.transcribe(samples: data, request: context)

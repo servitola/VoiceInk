@@ -172,23 +172,29 @@ struct ConfigurationRow: View {
     }
 
     private var selectedLanguage: String? {
-        if let langCode = config.selectedLanguage {
-            if langCode == "auto" { return String(localized: "Auto") }
-            if langCode == "en" { return String(localized: "English") }
+        let languageCodes = config.selectedLanguages
+        guard !languageCodes.isEmpty else { return "Default" }
 
-            if let modelName = config.selectedTranscriptionModelName,
-                let model = TranscriptionModelRegistry.model(
-                    forSelectionKey: modelName,
-                    in: transcriptionModelManager.allAvailableModels
-                ),
-                let langName = TranscriptionLanguageSupport.languages(
-                    for: model, realtimeEnabled: config.isRealtimeTranscriptionEnabled)[langCode]
-            {
-                return langName
-            }
-            return langCode.uppercased()
+        let model = config.selectedTranscriptionModelName.flatMap { modelName in
+            TranscriptionModelRegistry.model(
+                forSelectionKey: modelName,
+                in: transcriptionModelManager.allAvailableModels
+            )
         }
-        return "Default"
+        let languageNames =
+            model.map {
+                TranscriptionLanguageSupport.languages(
+                    for: $0, realtimeEnabled: config.isRealtimeTranscriptionEnabled)
+            } ?? [:]
+
+        return
+            languageCodes
+            .map { code in
+                if code == "auto" { return String(localized: "Auto") }
+                if code == "en" { return String(localized: "English") }
+                return languageNames[code] ?? code.uppercased()
+            }
+            .joined(separator: ", ")
     }
 
     private var appCount: Int { return config.allAppConfigs.count }

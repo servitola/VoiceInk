@@ -31,6 +31,50 @@ enum TranscriptionLanguageSupport {
         }.first ?? "en"
     }
 
+    /// Clamp a set of selected languages to what the model actually supports.
+    ///
+    /// Drops unsupported codes, removes duplicates while preserving order, and collapses to
+    /// `["auto"]` when auto-detect is among the selection — auto already subsumes every other pick.
+    /// Never returns an empty array; falls back to `validLanguageOrFallback` when nothing survives.
+    static func validLanguagesOrFallback(
+        _ languages: [String], for model: any TranscriptionModel, realtimeEnabled: Bool? = nil
+    ) -> [String] {
+        let supported = self.languages(for: model, realtimeEnabled: realtimeEnabled)
+
+        var seen = Set<String>()
+        let filtered = languages.filter { supported[$0] != nil && seen.insert($0).inserted }
+
+        if filtered.contains("auto") {
+            return ["auto"]
+        }
+
+        if filtered.isEmpty {
+            return [validLanguageOrFallback(nil, for: model, realtimeEnabled: realtimeEnabled)]
+        }
+
+        return filtered
+    }
+
+    /// Reduce a selection to the single language the single-locale backends can accept.
+    ///
+    /// Cloud, Apple native and streaming providers take one locale per request, so a multi-language
+    /// selection has to degrade to auto-detect where the model offers it, and to the first pick
+    /// otherwise.
+    static func singleLanguage(
+        from languages: [String], for model: any TranscriptionModel, realtimeEnabled: Bool? = nil
+    ) -> String {
+        let valid = validLanguagesOrFallback(languages, for: model, realtimeEnabled: realtimeEnabled)
+
+        if valid.count > 1 {
+            let supported = self.languages(for: model, realtimeEnabled: realtimeEnabled)
+            if supported["auto"] != nil {
+                return "auto"
+            }
+        }
+
+        return valid.first ?? validLanguageOrFallback(nil, for: model, realtimeEnabled: realtimeEnabled)
+    }
+
 }
 
 enum LanguageDictionary {

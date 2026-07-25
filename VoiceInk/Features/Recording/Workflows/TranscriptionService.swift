@@ -1,15 +1,37 @@
 import Foundation
 
 struct TranscriptionRequestContext {
+    /// Every language the user selected. Backends that can honour more than one (Whisper,
+    /// Parakeet v3) read this; the rest use `language`.
+    let languages: [String]
+    /// The selection reduced to the single value single-locale backends accept. Resolved by
+    /// `ModeRuntimeResolver` via `TranscriptionLanguageSupport.singleLanguage(from:for:)`.
     let language: String?
     let prompt: String?
     var vocabulary: RecordingVocabulary? = nil
 
-    static var currentDefaults: TranscriptionRequestContext {
-        let language = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
-        return TranscriptionRequestContext(
+    init(languages: [String], language: String?, prompt: String?, vocabulary: RecordingVocabulary? = nil) {
+        self.languages = languages
+        self.language = language
+        self.prompt = prompt
+        self.vocabulary = vocabulary
+    }
+
+    init(language: String?, prompt: String?, vocabulary: RecordingVocabulary? = nil) {
+        self.init(
+            languages: language.map { [$0] } ?? [],
             language: language,
-            prompt: WhisperPrompt.resolvedPrompt(for: language)
+            prompt: prompt,
+            vocabulary: vocabulary
+        )
+    }
+
+    static var currentDefaults: TranscriptionRequestContext {
+        let languages = UserDefaults.standard.selectedLanguages
+        return TranscriptionRequestContext(
+            languages: languages,
+            language: languages.count == 1 ? languages[0] : "auto",
+            prompt: WhisperPrompt.combinedPrompt(for: languages)
         )
     }
 
@@ -21,7 +43,12 @@ struct TranscriptionRequestContext {
 
     func scoped(to model: any TranscriptionModel) -> TranscriptionRequestContext {
         guard model.provider == .whisper else {
-            return TranscriptionRequestContext(language: language, prompt: nil, vocabulary: vocabulary)
+            return TranscriptionRequestContext(
+                languages: languages,
+                language: language,
+                prompt: nil,
+                vocabulary: vocabulary
+            )
         }
 
         return self

@@ -283,6 +283,12 @@ struct ModeConfigFormView: View {
     private var languagePicker: some View {
         if let selectedModel = effectiveModelName,
             let modelInfo = warmupSnapshot.transcriptionModel(named: selectedModel),
+            modelInfo.supportedLanguages.count > 1,
+            supportsMultipleLanguages(modelInfo)
+        {
+            multiLanguagePicker(for: modelInfo)
+        } else if let selectedModel = effectiveModelName,
+            let modelInfo = warmupSnapshot.transcriptionModel(named: selectedModel),
             modelInfo.supportedLanguages.count > 1
         {
             let languageBinding = Binding<String?>(
@@ -328,9 +334,92 @@ struct ModeConfigFormView: View {
         {
             EmptyView()
                 .onAppear {
-                    draft.selectedLanguage = effectiveLanguage(for: modelInfo)
+                    draft.selectedLanguages = [effectiveLanguage(for: modelInfo)]
                 }
         }
+    }
+
+    /// Multi-select is only offered where more than one language is actually honoured at decode
+    /// time. Cloud, Apple native and streaming providers take a single locale per request, so a
+    /// checkbox list there would promise something the backend cannot deliver.
+    private func supportsMultipleLanguages(_ model: any TranscriptionModel) -> Bool {
+        model.provider == .whisper || model.provider == .fluidAudio
+    }
+
+    @ViewBuilder
+    private func multiLanguagePicker(for model: any TranscriptionModel) -> some View {
+        let selected = effectiveLanguages(for: model)
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Languages")
+
+                Spacer(minLength: 12)
+
+                Menu {
+                    ForEach(sortedLanguages(for: model), id: \.key) { key, value in
+                        Toggle(
+                            value,
+                            isOn: Binding(
+                                get: { selected.contains(key) },
+                                set: { _ in draft.toggleLanguage(key) }
+                            )
+                        )
+                    }
+                } label: {
+                    Text(languagesSummary(selected, for: model))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            if spansMultipleScripts(selected), model.provider == .fluidAudio {
+                Text("Parakeet filters by script — a mix of scripts transcribes as auto-detect.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .onAppear {
+            draft.selectedLanguages = selected
+        }
+    }
+
+    private func sortedLanguages(for model: any TranscriptionModel) -> [(key: String, value: String)] {
+        availableLanguages(for: model).sorted {
+            if $0.key == "auto" { return true }
+            if $1.key == "auto" { return false }
+            return $0.value < $1.value
+        }
+    }
+
+    private func languagesSummary(_ languages: [String], for model: any TranscriptionModel) -> String {
+        let names = availableLanguages(for: model)
+        let selectedNames = languages.map { names[$0] ?? $0 }
+        return selectedNames.isEmpty ? String(localized: "None") : selectedNames.joined(separator: ", ")
+    }
+
+    /// Parakeet's decoder hint is a script filter, so a selection covering more than one script
+    /// cannot be enforced. Mirrors FluidAudioModelManager.languageHint(from:for:).
+    private func spansMultipleScripts(_ languages: [String]) -> Bool {
+        let cyrillic: Set<String> = ["ru", "uk", "be", "bg", "sr"]
+        let greek: Set<String> = ["el"]
+
+        let scripts = Set(
+            languages.filter { $0 != "auto" }.map { code -> String in
+                if cyrillic.contains(code) { return "cyrillic" }
+                if greek.contains(code) { return "greek" }
+                return "latin"
+            })
+
+        return scripts.count > 1
+    }
+
+    private func effectiveLanguages(for model: any TranscriptionModel) -> [String] {
+        TranscriptionLanguageSupport.validLanguagesOrFallback(
+            draft.selectedLanguages,
+            for: model,
+            realtimeEnabled: draft.isRealtimeTranscriptionEnabled
+        )
     }
 
     private var aiEnhancementSection: some View {
