@@ -16,6 +16,13 @@ extension VoiceInkEngine {
         }
         service.canStartListening = { [weak self] in
             guard let self else { return false }
+            // While the wake word also ends dictation, listening through an
+            // active recording is the whole point. Transcription and enhancement
+            // still take the detector down: there is nothing to stop by then,
+            // and the model would compete with the one doing the real work.
+            if UserDefaults.standard.wakeWordStopsRecording, self.recordingState == .recording {
+                return true
+            }
             return self.recordingState == .idle
         }
         // The local engine reuses the app's shared FluidAudio service, so the
@@ -99,20 +106,24 @@ extension VoiceInkEngine {
         wakeWordLastRecognizedText = service.lastRecognizedText
     }
 
-    /// Handle wake word detection - trigger recording
+    /// Handle wake word detection - start recording, or finish the one running.
     @MainActor
     func handleWakeWordDetected() async {
-        logger.notice("🎯 Wake word detected - starting recording")
+        // The same notification does both: `toggleRecorderPanel` starts a session
+        // when the engine is idle and finishes it - transcribe, then paste - when
+        // one is running, which is exactly what pressing the shortcut twice does.
+        if recordingState == .recording {
+            logger.notice("🎯 Wake word detected - finishing recording")
+        } else {
+            logger.notice("🎯 Wake word detected - starting recording")
+            // Listening resumes once the pipeline returns to idle, unless the
+            // detector kept the microphone to hear the closing word.
+            if !UserDefaults.standard.wakeWordStopsRecording {
+                isWakeWordListening = false
+            }
+        }
 
-        // Stop wake word listening temporarily
-        isWakeWordListening = false
-
-        // Show the recorder panel and start recording via the standard path.
-        // toggleRecorderPanel plays the start sound, reveals the panel, and toggles
-        // recording — with the panel hidden and the engine idle it starts a new session.
         NotificationCenter.default.post(name: .toggleRecorderPanel, object: nil)
-
-        // Wake word listening will resume after recording completes
     }
 
     /// Resume wake word listening after recording completes

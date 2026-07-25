@@ -50,6 +50,47 @@ struct WakeWordDetectionTests {
     }
 }
 
+/// The closing wake word, spoken to finish dictation, lands in the recording and
+/// has to come off the tail.
+struct TrailingWakeWordRemovalTests {
+
+    private func strip(_ text: String) -> String {
+        TranscriptionOutputFilter.removeTrailingWakeWord(from: text, wakeWord: "лошадка")
+    }
+
+    @Test func removesTheClosingWord() {
+        #expect(strip("сделай вот это лошадка") == "сделай вот это")
+    }
+
+    @Test func keepsTerminalPunctuationTheWakeWordCarried() {
+        #expect(strip("сделай вот это лошадка.") == "сделай вот это.")
+    }
+
+    @Test func doesNotDuplicateExistingPunctuation() {
+        #expect(strip("сделай вот это. лошадка.") == "сделай вот это.")
+    }
+
+    @Test func removesAMisrecognizedClosingWord() {
+        #expect(strip("сделай вот это лошатка") == "сделай вот это")
+    }
+
+    @Test func leavesTextThatDoesNotEndWithTheWakeWord() {
+        #expect(strip("сделай вот это") == "сделай вот это")
+    }
+
+    @Test func doesNotStripTheWakeWordFromTheMiddle() {
+        #expect(strip("лошадка бежит по полю") == "лошадка бежит по полю")
+    }
+
+    @Test func aLoneWakeWordLeavesNothing() {
+        #expect(strip("лошадка") == "")
+    }
+
+    @Test func handlesEmptyInput() {
+        #expect(strip("") == "")
+    }
+}
+
 @MainActor
 struct WakeWordDeviceResolutionTests {
 
