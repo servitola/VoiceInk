@@ -151,6 +151,21 @@ actor LocalWakeWordRecognizer {
         )
     }
 
+    /// Drops the audio collected so far, keeping the session running.
+    ///
+    /// Called once the wake word has been acted on. The segment is transcribed
+    /// from its start every time it grows, so the word that triggered stays in
+    /// every subsequent partial - "лошадка", then "лошадка сделай вот это" - and
+    /// fires again as soon as any cooldown lapses. Clearing the text buffer
+    /// upstream cannot help: the word is still in the audio. Speech state and
+    /// VAD state are deliberately preserved, so collection continues from here
+    /// rather than waiting for the speaker to pause and start a new utterance.
+    func consumeSegment() {
+        preRoll.removeAll()
+        segment.removeAll()
+        nextPartialAt = Self.firstPartialSamples
+    }
+
     /// Hands over 16 kHz mono samples. Called from the capture queue.
     nonisolated func append(_ samples: [Float]) {
         guard !samples.isEmpty else { return }
@@ -285,6 +300,7 @@ actor LocalWakeWordRecognizer {
     }
 
     nonisolated func append(_ samples: [Float]) {}
+    func consumeSegment() {}
     func stop() async {}
 }
 
