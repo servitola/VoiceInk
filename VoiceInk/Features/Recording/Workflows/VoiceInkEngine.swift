@@ -122,6 +122,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
     @Published var wakeWordMicrophoneUnavailable = false
     /// Device the wake word detector is actually bound to, for settings feedback.
     @Published var wakeWordBoundDeviceName: String?
+    /// Why wake word detection gave up, when it did.
+    @Published var wakeWordFailureMessage: String?
+    /// Wake word recognition is running on Apple's servers, not on device.
+    @Published var wakeWordUsingServerRecognition = false
     var wakeWordService: WakeWordListeningService?
 
     let recorder = Recorder()
