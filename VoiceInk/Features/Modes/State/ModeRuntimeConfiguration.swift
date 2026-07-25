@@ -3,6 +3,7 @@ import Foundation
 struct TranscriptionRuntimeConfiguration {
     let mode: ModeConfig
     let model: any TranscriptionModel
+    let languages: [String]
     let language: String
     let isRealtimeEnabled: Bool
 
@@ -15,8 +16,10 @@ struct TranscriptionRuntimeConfiguration {
 
     var requestContext: TranscriptionRequestContext {
         TranscriptionRequestContext(
+            languages: languages,
             language: language,
-            prompt: model.provider == .whisper ? WhisperPrompt.resolvedPrompt(for: language) : nil
+            // Bias whisper.cpp with the prompt hints of every language this mode selected.
+            prompt: model.provider == .whisper ? WhisperPrompt.combinedPrompt(for: languages) : nil
         )
     }
 }
@@ -119,8 +122,13 @@ enum ModeRuntimeResolver {
             return nil
         }
 
-        let language = TranscriptionLanguageSupport.validLanguageOrFallback(
-            mode.selectedLanguage,
+        let languages = TranscriptionLanguageSupport.validLanguagesOrFallback(
+            mode.selectedLanguages,
+            for: model,
+            realtimeEnabled: mode.isRealtimeTranscriptionEnabled
+        )
+        let language = TranscriptionLanguageSupport.singleLanguage(
+            from: languages,
             for: model,
             realtimeEnabled: mode.isRealtimeTranscriptionEnabled
         )
@@ -128,6 +136,7 @@ enum ModeRuntimeResolver {
         return TranscriptionRuntimeConfiguration(
             mode: mode,
             model: model,
+            languages: languages,
             language: language,
             isRealtimeEnabled: TranscriptionRealtimeSupport.isEnabled(
                 for: model, modeValue: mode.isRealtimeTranscriptionEnabled)
