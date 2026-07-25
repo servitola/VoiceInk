@@ -94,7 +94,7 @@ Custom features that must survive (as of this writing):
 - **CLI bridge** — `CLIBridgeService`, wired in `VoiceInk.swift`; `make cli` / `VoiceInkCLI`.
 - **WordReplacement unicode fix + tests** — `applyReplacements(to:rules:)` pure transform + `VoiceInkTests/WordReplacementServiceTests.swift`.
 - **Show Menu Bar Icon toggle + window recovery** — SettingsView/MenuBarView/AppDelegate + `MenuBarManager.focusMainWindow`.
-- **local-build stable codesigning** — `LocalBuild.xcconfig`, `VoiceInk.local.entitlements`, Makefile `local`/`fix-derived-app`.
+- **local-build stable codesigning** — `LocalBuild.xcconfig`, `VoiceInk.local.entitlements`, `scripts/create-local-signing-cert.sh`, Makefile `local`/`local-stable`/`fix-derived-app`.
 
 ### 4. Resolve conflicts (merge upstream + keep our behavior)
 
