@@ -8,6 +8,8 @@ struct WakeWordSettingsView: View {
     @AppStorage("wakeWord") private var wakeWord = "лошадка"
     @AppStorage("wakeWordLanguage") private var wakeWordLanguage = "ru-RU"
     @AppStorage("wakeWordMicrophoneUID") private var wakeWordMicrophoneUID = ""
+    @AppStorage("wakeWordEngine") private var wakeWordEngine = WakeWordEngineKind.localModel.rawValue
+    @AppStorage("wakeWordModelName") private var wakeWordModelName = ""
     @AppStorage("removeWakeWordFromTranscription") private var removeWakeWordFromTranscription = true
     @Environment(\.colorScheme) private var colorScheme
 
@@ -32,6 +34,7 @@ struct WakeWordSettingsView: View {
 
             if isWakeWordEnabled {
                 wakeWordConfigSection
+                engineSection
                 languageSection
                 microphoneSection
                 optionsSection
@@ -231,6 +234,92 @@ struct WakeWordSettingsView: View {
         }
     }
 
+    private var engineSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Recognition Engine")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "cpu")
+                        .foregroundColor(.secondary)
+
+                    Picker("Engine", selection: $wakeWordEngine) {
+                        ForEach(WakeWordEngineKind.allCases) { kind in
+                            Text(kind.displayName).tag(kind.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .onChange(of: wakeWordEngine) { _, newValue in
+                        guard let kind = WakeWordEngineKind(rawValue: newValue) else { return }
+                        voiceInkEngine.configureWakeWordEngine(kind)
+                    }
+
+                    Spacer()
+                }
+
+                if wakeWordEngine == WakeWordEngineKind.localModel.rawValue {
+                    HStack {
+                        Image(systemName: "shippingbox")
+                            .foregroundColor(.secondary)
+
+                        Picker("Model", selection: $wakeWordModelName) {
+                            ForEach(localWakeWordModels, id: \.name) { model in
+                                Text(model.displayName).tag(model.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .disabled(localWakeWordModels.isEmpty)
+                        .onChange(of: wakeWordModelName) { _, newValue in
+                            guard !newValue.isEmpty else { return }
+                            voiceInkEngine.configureWakeWordModel(named: newValue)
+                        }
+
+                        Spacer()
+                    }
+
+                    if localWakeWordModels.isEmpty {
+                        Text("No local model is downloaded. Download a Parakeet model on the AI Models page.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .padding(.leading, 28)
+                    } else {
+                        Text("Runs entirely on this Mac. Speech detection gates the model, so it only transcribes when someone is actually talking.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 28)
+                    }
+                } else {
+                    Text("Apple Speech runs on device only when macOS Dictation is enabled. Without it, audio is sent to Apple's servers the whole time it listens.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 28)
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+            )
+        }
+        .onAppear {
+            // Default the picker to whatever is actually downloaded, so an
+            // untouched setting still starts the engine.
+            if wakeWordModelName.isEmpty, let first = localWakeWordModels.first {
+                wakeWordModelName = first.name
+                voiceInkEngine.configureWakeWordModel(named: first.name)
+            }
+        }
+    }
+
+    private var localWakeWordModels: [any TranscriptionModel] {
+        voiceInkEngine.transcriptionModelManager.usableModels.filter {
+            $0.provider == .fluidAudio && $0.name.hasPrefix("parakeet-tdt")
+        }
+    }
+
     private var optionsSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Options")
@@ -360,16 +449,16 @@ struct WakeWordSettingsView: View {
     private func handleWakeWordToggle(enabled: Bool) {
         Task {
             if enabled {
-                // Request speech recognition permissions first
-                let hasPermission = await voiceInkEngine.requestWakeWordPermissions()
-                if hasPermission {
-                    await voiceInkEngine.startWakeWordListening()
-                } else {
-                    // Permission denied, revert toggle
-                    await MainActor.run {
-                        isWakeWordEnabled = false
-                    }
+                // Speech Recognition authorization is Apple's recognizer only.
+                // The local engine never touches the Speech framework, so asking
+                // for it there would block offline detection on an unused grant.
+                if wakeWordEngine == WakeWordEngineKind.appleSpeech.rawValue,
+                    await !voiceInkEngine.requestWakeWordPermissions()
+                {
+                    await MainActor.run { isWakeWordEnabled = false }
+                    return
                 }
+                await voiceInkEngine.startWakeWordListening()
             } else {
                 await voiceInkEngine.stopWakeWordListening()
             }
