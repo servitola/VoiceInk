@@ -72,7 +72,14 @@ actor LocalWakeWordRecognizer {
     /// Ignore blips too short to contain a wake word.
     private static let minSegmentSamples = 4_000
     /// Transcribe an ongoing utterance once it reaches this length...
-    private static let firstPartialSamples = 32_000
+    ///
+    /// This is the wake word's worst-case latency. A speaker who pauses after it
+    /// is served by the VAD's speech-end event within a few hundred milliseconds,
+    /// but one who carries straight on ("лошадка, сделай вот это") produces no
+    /// such event, so nothing is transcribed until the segment reaches this size
+    /// - and every word spoken until then is said before recording begins, and
+    /// lost. At the original 32_000 (2 s) that swallowed the first few words.
+    private static let firstPartialSamples = 12_000
     /// ...and again every this many samples while the speaker keeps going.
     private static let partialStrideSamples = 24_000
     /// Hard cap on one segment, so a monologue cannot grow the buffer forever.
