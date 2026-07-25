@@ -392,7 +392,23 @@ Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
 
-Current state (2026-07-25, later session): multi-language selection was reworked — see
+Current state (2026-07-25, wake-word session): the app is installed, running and stable
+at `780f957`. Wake word is enabled and verified bound to the user's USB microphone
+(`Wake word listening on device 114 'USB PnP Audio Device'`), which is the original
+complaint and is now fixed — see the **Wake word (fork feature)** section for why the
+USB UID kept moving and how `modelUID` solves it.
+
+Recognition currently falls back to **Apple's servers**, and the user does not want that.
+The cause is measured, not guessed: `Siri and Dictation are disabled [kLSRErrorDomain 201]`,
+because macOS Dictation is off. Turning on System Settings → Keyboard → Dictation (with
+Russian) makes Apple's recognizer run on device and closes the privacy issue with one
+toggle. **The user has been asked to do this and has not confirmed yet — check first.**
+
+An offline local engine (Silero VAD gating Parakeet) was built and then **reverted**
+(`c61cdc7`) because it crashed the app; the evidence table is in the wake-word section.
+The code is intact in `6a27634` and easy to restore once the crash is understood.
+
+Earlier in the day (same session): multi-language selection was reworked — see
 the **Language selection (fork feature)** section above for the design and the Parakeet
 script-filter finding. Three things were wrong before this work and are now fixed:
 the multi-select `LanguageSelectionView` had **zero call sites** since upstream's AI Models
@@ -427,14 +443,24 @@ Next steps / open questions:
 - Local commits are unpushed by design — check `git log origin/main..main` and push with
   `--force-with-lease` (history is rebased, so a plain push is rejected).
 - `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
-- **Wake word still needs a runtime pass with the USB mic physically attached** (it was not
-  connected during the fix session, so only the code paths were verified). Check: the status
-  card names the bound device; unplug → "not connected" warning and the built-in mic is NOT
-  taken; replug into a *different* port → rebinds on its own; dictate three times in a row →
-  listening resumes each time; leave it 15 min silent → still triggers. Watch
+- **Next task, if the user still wants offline detection: find the crash from `6a27634`.**
+  The measured facts and the reproduction script are in the wake-word section. Do not
+  re-derive them, and do not reinstall that build on the user's machine while hunting —
+  it kills the app on the first window open. Start with Guard Malloc on the Apple backend.
+- **Never verified: whether the wake word actually fires on the spoken word.** Every session
+  so far ended before that could be observed. Say "лошадка" and watch
   `log stream --predicate 'subsystem == "com.prakashjoshipax.voiceink" AND category == "WakeWordListeningService"'`
-  and confirm `onDevice recognition: true` for `ru-RU` — if it logs `false`, the on-device
-  asset never downloaded and the ~1 min server cap still applies.
+  for `🎯 Wake word detected`. Also still unverified: unplug → "not connected" warning with
+  the built-in mic NOT taken; replug into a *different* port → rebinds by itself; three
+  dictations in a row → listening resumes each time.
+- The user's `prioritizedDevices` still lists the same physical USB mic three times under
+  three UIDs, a manual workaround for the bug `daf5f7e` fixed in `getCurrentDevice()`.
+  Two of those entries can now be deleted — worth offering.
+- Diagnostic residue to be aware of: this session wrote `wakeWordMicrophoneUID`,
+  `wakeWordMicrophoneModelUID` and `wakeWordMicrophoneName` directly via `defaults` while
+  narrowing the crash, and briefly toggled `isWakeWordEnabled` and `wakeWordEngine`. The
+  values were restored to the USB microphone and verified in the log, but `wakeWordEngine`
+  is left over from the reverted feature and is now simply ignored.
 - Optional cleanup: `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels/`
   still contains a junk `__MACOSX/` dir from an old unzip - safe to `rm -rf`.
 
