@@ -56,14 +56,20 @@ class AudioTranscriptionService: ObservableObject {
 
         do {
             let mode = mode ?? ModeManager.shared.currentEffectiveConfiguration
-            let language = TranscriptionLanguageSupport.validLanguageOrFallback(
-                mode?.selectedLanguage,
+            let languages = TranscriptionLanguageSupport.validLanguagesOrFallback(
+                mode?.selectedLanguages ?? [],
+                for: model,
+                realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+            )
+            let language = TranscriptionLanguageSupport.singleLanguage(
+                from: languages,
                 for: model,
                 realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
             )
             let requestContext = TranscriptionRequestContext(
+                languages: languages,
                 language: language,
-                prompt: model.provider == .whisper ? WhisperPrompt.resolvedPrompt(for: language) : nil
+                prompt: model.provider == .whisper ? WhisperPrompt.combinedPrompt(for: languages) : nil
             )
             let modeName = (mode?.isEnabled == true) ? mode?.name : nil
             let modeEmoji = (mode?.isEnabled == true) ? mode?.icon.value : nil

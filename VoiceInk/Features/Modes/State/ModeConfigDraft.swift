@@ -12,7 +12,7 @@ struct ModeConfigDraft {
     var selectedPromptId: UUID?
     var selectedTranscriptionModelName: String?
     var isRealtimeTranscriptionEnabled: Bool
-    var selectedLanguage: String?
+    var selectedLanguages: [String]
     var isTextFormattingEnabled: Bool
     var useClipboardContext: Bool
     var useSelectedTextContext: Bool
@@ -24,6 +24,12 @@ struct ModeConfigDraft {
     var customCommand: String
     var isDefault: Bool
     var isTranscriptionFormattingExpanded: Bool
+
+    /// Facade over `selectedLanguages` mirroring `ModeConfig.selectedLanguage`.
+    var selectedLanguage: String? {
+        get { selectedLanguages.first }
+        set { selectedLanguages = newValue.map { [$0] } ?? [] }
+    }
 
     private var sourceConfig: ModeConfig?
 
@@ -43,7 +49,7 @@ struct ModeConfigDraft {
             selectedPromptId = inheritedConfig?.selectedPrompt.flatMap { UUID(uuidString: $0) }
             selectedTranscriptionModelName = inheritedConfig?.selectedTranscriptionModelName
             isRealtimeTranscriptionEnabled = true
-            selectedLanguage = inheritedConfig?.selectedLanguage
+            selectedLanguages = inheritedConfig?.selectedLanguages ?? []
             isTextFormattingEnabled = true
             useClipboardContext = false
             useSelectedTextContext = false
@@ -70,7 +76,7 @@ struct ModeConfigDraft {
             selectedPromptId = latestConfig.selectedPrompt.flatMap { UUID(uuidString: $0) }
             selectedTranscriptionModelName = latestConfig.selectedTranscriptionModelName
             isRealtimeTranscriptionEnabled = latestConfig.isRealtimeTranscriptionEnabled
-            selectedLanguage = latestConfig.selectedLanguage
+            selectedLanguages = latestConfig.selectedLanguages
             isTextFormattingEnabled = latestConfig.isTextFormattingEnabled
             useClipboardContext = latestConfig.useClipboardContext
             useSelectedTextContext = latestConfig.useSelectedTextContext
@@ -141,11 +147,25 @@ struct ModeConfigDraft {
     }
 
     mutating func useCompatibleLanguage(for model: any TranscriptionModel) {
-        selectedLanguage = TranscriptionLanguageSupport.validLanguageOrFallback(
-            selectedLanguage ?? "en",
+        selectedLanguages = TranscriptionLanguageSupport.validLanguagesOrFallback(
+            selectedLanguages,
             for: model,
             realtimeEnabled: isRealtimeTranscriptionEnabled
         )
+    }
+
+    /// Add or remove a language, refusing to empty the selection, and collapsing to a lone
+    /// `auto` when auto-detect is picked (auto already covers everything else).
+    mutating func toggleLanguage(_ languageCode: String) {
+        if let index = selectedLanguages.firstIndex(of: languageCode) {
+            guard selectedLanguages.count > 1 else { return }
+            selectedLanguages.remove(at: index)
+        } else if languageCode == "auto" {
+            selectedLanguages = ["auto"]
+        } else {
+            selectedLanguages.removeAll { $0 == "auto" }
+            selectedLanguages.append(languageCode)
+        }
     }
 
     mutating func applyOutputRules(canRespond: Bool) {
@@ -181,7 +201,7 @@ struct ModeConfigDraft {
                 selectedPrompt: selectedPromptId?.uuidString,
                 selectedTranscriptionModelName: selectedTranscriptionModelName,
                 isRealtimeTranscriptionEnabled: isRealtimeTranscriptionEnabled,
-                selectedLanguage: selectedLanguage,
+                selectedLanguages: selectedLanguages,
                 useClipboardContext: useClipboardContext,
                 useSelectedTextContext: useSelectedTextContext,
                 useScreenCapture: useScreenCapture,
@@ -206,7 +226,7 @@ struct ModeConfigDraft {
             updatedConfig.selectedPrompt = selectedPromptId?.uuidString
             updatedConfig.selectedTranscriptionModelName = selectedTranscriptionModelName
             updatedConfig.isRealtimeTranscriptionEnabled = isRealtimeTranscriptionEnabled
-            updatedConfig.selectedLanguage = selectedLanguage
+            updatedConfig.selectedLanguages = selectedLanguages
             updatedConfig.isTextFormattingEnabled = isTextFormattingEnabled
             updatedConfig.useClipboardContext = useClipboardContext
             updatedConfig.useSelectedTextContext = useSelectedTextContext

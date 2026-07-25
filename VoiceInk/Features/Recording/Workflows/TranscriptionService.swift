@@ -1,20 +1,36 @@
 import Foundation
 
 struct TranscriptionRequestContext {
+    /// Every language the user selected. Backends that can honour more than one (Whisper,
+    /// Parakeet v3) read this; the rest use `language`.
+    let languages: [String]
+    /// The selection reduced to the single value single-locale backends accept. Resolved by
+    /// `ModeRuntimeResolver` via `TranscriptionLanguageSupport.singleLanguage(from:for:)`.
     let language: String?
     let prompt: String?
 
+    init(languages: [String], language: String?, prompt: String?) {
+        self.languages = languages
+        self.language = language
+        self.prompt = prompt
+    }
+
+    init(language: String?, prompt: String?) {
+        self.init(languages: language.map { [$0] } ?? [], language: language, prompt: prompt)
+    }
+
     static var currentDefaults: TranscriptionRequestContext {
-        let language = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
+        let languages = UserDefaults.standard.selectedLanguages
         return TranscriptionRequestContext(
-            language: language,
-            prompt: WhisperPrompt.resolvedPrompt(for: language)
+            languages: languages,
+            language: languages.count == 1 ? languages[0] : "auto",
+            prompt: WhisperPrompt.combinedPrompt(for: languages)
         )
     }
 
     func scoped(to model: any TranscriptionModel) -> TranscriptionRequestContext {
         guard model.provider == .whisper else {
-            return TranscriptionRequestContext(language: language, prompt: nil)
+            return TranscriptionRequestContext(languages: languages, language: language, prompt: nil)
         }
 
         return self
