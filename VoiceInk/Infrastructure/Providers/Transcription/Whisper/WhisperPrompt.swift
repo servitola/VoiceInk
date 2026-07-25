@@ -83,11 +83,42 @@ class WhisperPrompt: ObservableObject {
         UserDefaults.standard.synchronize()  // Force immediate synchronization
     }
 
+    /// Concatenate the prompt hints of every selected language, so whisper.cpp running in
+    /// auto-detect mode is biased toward all of them rather than a single one.
+    ///
+    /// Reads custom prompts straight from `UserDefaults` so it can be called off the main actor
+    /// while building a `TranscriptionRequestContext`.
+    nonisolated static func combinedPrompt(for languages: [String]) -> String {
+        let customPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) as? [String: String] ?? [:]
+
+        var combinedPrompt = ""
+        for language in languages where language != "auto" {
+            let languagePrompt = languagePrompt(for: language, customPrompts: customPrompts)
+            guard !languagePrompt.isEmpty else { continue }
+
+            if !combinedPrompt.isEmpty {
+                combinedPrompt += " "
+            }
+            combinedPrompt += languagePrompt
+        }
+
+        return combinedPrompt
+    }
+
+    private nonisolated static func languagePrompt(
+        for language: String, customPrompts: [String: String]
+    ) -> String {
+        if let customPrompt = customPrompts[language], !customPrompt.isEmpty {
+            return customPrompt
+        }
+
+        return languagePrompts[language] ?? languagePrompts["default"] ?? ""
+    }
+
     func updateTranscriptionPrompt() {
         // Get the currently selected languages from UserDefaults
         let selectedLanguages = UserDefaults.standard.selectedLanguages
 
-        // Combine prompts for all selected languages
         var combinedPrompt = ""
         for language in selectedLanguages where language != "auto" {
             let languagePrompt = getLanguagePrompt(for: language)
@@ -110,27 +141,15 @@ class WhisperPrompt: ObservableObject {
     }
 
     func getLanguagePrompt(for language: String) -> String {
-        // First check if there's a custom prompt for this language
-        if let customPrompt = customPrompts[language], !customPrompt.isEmpty {
-            return customPrompt
-        }
-
-        // Otherwise return the default prompt, with safe fallback
-        return Self.languagePrompts[language] ?? Self.languagePrompts["default"] ?? ""
+        Self.languagePrompt(for: language, customPrompts: customPrompts)
     }
 
     /// Returns the saved prompt for a language.
     nonisolated static func resolvedPrompt(for language: String?) -> String {
         guard let language, !language.isEmpty else { return "" }
 
-        if let savedPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) as? [String: String],
-            let customPrompt = savedPrompts[language],
-            !customPrompt.isEmpty
-        {
-            return customPrompt
-        }
-
-        return languagePrompts[language] ?? languagePrompts["default"] ?? ""
+        let savedPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) as? [String: String] ?? [:]
+        return languagePrompt(for: language, customPrompts: savedPrompts)
     }
 
     func setCustomPrompt(_ prompt: String, for language: String) {

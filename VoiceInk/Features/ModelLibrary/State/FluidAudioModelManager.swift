@@ -139,15 +139,24 @@ class FluidAudioModelManager: ObservableObject {
             .appendingPathComponent("\(nemotronChunkMs)ms", isDirectory: true)
     }
 
-    nonisolated static func languageHint(from languageCode: String?, for modelName: String) -> Language? {
+    /// Resolve the selected languages into the single hint the v3 decoder accepts.
+    ///
+    /// FluidAudio's `Language` is a **script** filter, not a per-language model switch: it maps to
+    /// a `Script` (latin / cyrillic / greek) and the v3 TDT decoder drops top-K tokens whose text
+    /// belongs to another script. So a selection confined to one script can be enforced by any of
+    /// its languages, while a selection spanning several scripts has no representable filter and
+    /// falls back to `nil` — no filtering, i.e. the same behaviour as auto-detect.
+    nonisolated static func languageHint(from languageCodes: [String], for modelName: String) -> Language? {
         guard !isParakeetUnifiedModel(named: modelName),
             !isNemotronModel(named: modelName),
             asrVersion(for: modelName) == .v3,
-            let languageCode,
-            languageCode != "auto"
+            !languageCodes.contains("auto")
         else { return nil }
 
-        return Language(rawValue: languageCode)
+        let languages = languageCodes.compactMap { Language(rawValue: $0) }
+        guard !languages.isEmpty, Set(languages.map(\.script)).count == 1 else { return nil }
+
+        return languages.first
     }
 
     init() {}
