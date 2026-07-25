@@ -8,8 +8,6 @@ struct WakeWordSettingsView: View {
     @AppStorage("wakeWord") private var wakeWord = "лошадка"
     @AppStorage("wakeWordLanguage") private var wakeWordLanguage = "ru-RU"
     @AppStorage("wakeWordMicrophoneUID") private var wakeWordMicrophoneUID = ""
-    @AppStorage("wakeWordEngine") private var wakeWordEngine = WakeWordEngineKind.localModel.rawValue
-    @AppStorage("wakeWordModelName") private var wakeWordModelName = "parakeet-tdt-0.6b-v3"
     @AppStorage("removeWakeWordFromTranscription") private var removeWakeWordFromTranscription = true
     @Environment(\.colorScheme) private var colorScheme
 
@@ -34,7 +32,6 @@ struct WakeWordSettingsView: View {
 
             if isWakeWordEnabled {
                 wakeWordConfigSection
-                engineSection
                 languageSection
                 microphoneSection
                 optionsSection
@@ -113,77 +110,6 @@ struct WakeWordSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.leading, 28)
-            }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.controlBackgroundColor))
-                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-            )
-        }
-    }
-
-    private var engineSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Recognition Engine")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Image(systemName: "cpu")
-                        .foregroundColor(.secondary)
-
-                    Picker("Engine", selection: $wakeWordEngine) {
-                        ForEach(WakeWordEngineKind.allCases) { kind in
-                            Text(kind.displayName).tag(kind.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .onChange(of: wakeWordEngine) { _, newValue in
-                        guard let kind = WakeWordEngineKind(rawValue: newValue) else { return }
-                        voiceInkEngine.configureWakeWordEngine(kind)
-                    }
-
-                    Spacer()
-                }
-
-                if wakeWordEngine == WakeWordEngineKind.localModel.rawValue {
-                    HStack {
-                        Image(systemName: "shippingbox")
-                            .foregroundColor(.secondary)
-
-                        Picker("Model", selection: $wakeWordModelName) {
-                            ForEach(localWakeWordModels, id: \.name) { model in
-                                Text(model.displayName).tag(model.name)
-                            }
-                        }
-                        .labelsHidden()
-                        .disabled(localWakeWordModels.isEmpty)
-                        .onChange(of: wakeWordModelName) { _, newValue in
-                            voiceInkEngine.configureWakeWordModel(named: newValue)
-                        }
-
-                        Spacer()
-                    }
-
-                    if localWakeWordModels.isEmpty {
-                        Text("No local model is downloaded. Download a Parakeet model on the AI Models page.")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .padding(.leading, 28)
-                    } else {
-                        Text("Runs entirely on this Mac. Speech detection gates the model, so it only transcribes when someone is actually talking.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 28)
-                    }
-                } else {
-                    Text("Apple Speech runs on device only when macOS Dictation is enabled. Without it, audio is sent to Apple's servers the whole time it listens.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.leading, 28)
-                }
             }
             .padding()
             .background(
@@ -407,16 +333,6 @@ struct WakeWordSettingsView: View {
     }
 
     // MARK: - Helper Methods
-
-    /// Models the local wake word engine can actually drive: downloaded Parakeet
-    /// TDT models. The unified and Nemotron variants are streaming-only - they
-    /// carry decoder state between chunks, while wake word spotting hands over
-    /// independent snippets.
-    private var localWakeWordModels: [any TranscriptionModel] {
-        voiceInkEngine.transcriptionModelManager.usableModels.filter {
-            $0.provider == .fluidAudio && $0.name.hasPrefix("parakeet-tdt")
-        }
-    }
 
     private var isSavedMicrophoneDisconnected: Bool {
         !wakeWordMicrophoneUID.isEmpty
