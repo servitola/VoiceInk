@@ -8,7 +8,21 @@ extension VoiceInkEngine {
 
     /// Initialize wake word service and start listening if enabled
     func initializeWakeWordService() {
-        let service = WakeWordListeningService()
+        let service = WakeWordListeningService { [weak self] kind, language in
+            switch kind {
+            case .appleSpeech:
+                return AppleSpeechWakeWordRecognizer(language: language)
+            case .localModel:
+                // Falls back to Apple only if the engine went away, which cannot
+                // happen while the service it owns is alive.
+                guard let self else { return AppleSpeechWakeWordRecognizer(language: language) }
+                return LocalWakeWordRecognizer(
+                    transcriber: self.serviceRegistry.fluidAudioTranscriptionService,
+                    modelName: Self.resolvedWakeWordModelName(),
+                    languages: [String(language.prefix(2))]
+                )
+            }
+        }
         service.setWakeWordDetectedCallback { [weak self] in
             Task { @MainActor [weak self] in
                 await self?.handleWakeWordDetected()
@@ -75,6 +89,13 @@ extension VoiceInkEngine {
         }
 
         logger.notice("🎤 Wake word listening stopped")
+    }
+
+    /// The local model used for wake word detection. Defaults to the Parakeet
+    /// model the app ships with, which is also what dictation uses - so no
+    /// second copy is loaded into memory.
+    static func resolvedWakeWordModelName() -> String {
+        UserDefaults.standard.wakeWordModelName ?? "parakeet-tdt-0.6b-v3"
     }
 
     /// Mirror the service's state onto the engine so views can observe it.
@@ -146,6 +167,26 @@ extension VoiceInkEngine {
         UserDefaults.standard.wakeWordMicrophoneName = uid.isEmpty ? nil : device?.name
 
         service.configureMicrophone(uid: uid, modelUID: modelUID)
+    }
+
+    /// Switch the wake word detector between the local model and Apple Speech.
+    func configureWakeWordEngine(_ kind: WakeWordEngineKind) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+
+        service.configureEngine(kind)
+    }
+
+    /// Choose which local model spots the wake word.
+    func configureWakeWordModel(named modelName: String) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+
+        service.configureLocalModel(named: modelName)
     }
 
     /// Toggle wake word listening on/off
