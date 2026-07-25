@@ -359,6 +359,35 @@ failed and listening never came back after the first dictation.
 device list before auto-starting; that list arrives via `DispatchQueue.main.async`, and
 starting first bound the engine to the system default mic.
 
+**Do not reintroduce the swappable-backend refactor without solving this first.**
+An attempt to add an offline local engine (`WakeWordRecognizer` protocol +
+`LocalWakeWordRecognizer` on Silero VAD and Parakeet, commits `6a27634` / `fc8566f`,
+reverted in `c61cdc7`) made the app die whenever the main window was presented while
+the detector was capturing: `EXC_BAD_ACCESS` in `swift_task_isCurrentExecutor`,
+checking the executor for a SwiftData dynamic property (`DashboardContent`'s `@Query`),
+with no VoiceInk frame anywhere in the trace.
+
+What the bisect established, by script rather than by reading code:
+
+| Build | Wake word | Open main window ×6 |
+|---|---|---|
+| `903af13` (before the work) | on | 6/6 clean |
+| `143532e` (mic + failure fixes) | on | 6/6 clean |
+| `fc8566f` (local engine) | on, local model | crash on 1st |
+| `fc8566f` | on, Apple Speech | crash on 1st |
+| `fc8566f` | on, microphone missing so no capture | 6/6 clean |
+| `fc8566f`, `syncWakeWordState` disabled | on | crash on 2nd |
+
+So it needs live audio capture, it is independent of the recognition backend, and it
+is not the `@Published` mirroring. The fault arrived with the backend indirection in
+`6a27634`; making `LocalWakeWordRecognizer` and `FluidAudioTranscriptionService`
+actors (`fc8566f`) fixed genuine races but not this. Prime remaining suspect: the tap
+closure calling through the `any WakeWordRecognizer` existential, and the backends'
+`async` methods running off the main actor where the pre-refactor code did all of it
+inline in a `@MainActor` method. Next step is Guard Malloc
+(`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib`) on a build with the Apple backend,
+which is light enough to run under it, to catch the access at the point of corruption.
+
 Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
