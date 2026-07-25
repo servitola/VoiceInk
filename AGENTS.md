@@ -446,18 +446,21 @@ Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
 
-Current state (2026-07-25, second wake-word session): **wake word works, offline, and has
-been observed firing on the spoken word** — which every previous session ended without ever
-seeing. Installed and running at `7b3f1e1`.
+Current state (2026-07-26, second wake-word session): **the whole round trip works, offline,
+and was watched end to end by the user** — which every previous session ended without ever
+seeing. Installed and running at `f7a9f9a`.
+
+Say "лошадка" → recording starts. Dictate. Say "лошадка" → it finishes, transcribes and
+pastes, with both wake words stripped from the text. Verified live twice in the log:
 
 ```
-heard: лошадка.       -> 🎯 Wake word detected
-heard: ваша лошадка.  -> 🎯 Wake word detected
+🎯 Wake word detected   (start)
+🎯 Wake word detected   (stop)
+🎯 Closing wake word removed from transcription
 ```
 
 Local Parakeet on the user's USB microphone, `engine: localModel, onDevice recognition: true`,
-nothing leaving the machine, listening resuming after each dictation. Saying the word again
-finishes dictation and pastes, the same as pressing the shortcut twice.
+nothing leaving the machine, listening resuming after each dictation.
 
 The reason it never fired was not the recogniser and not the microphone selection fixed in
 the previous session: the `AVAudioEngine` tap was **never called at all**, so the detector
@@ -472,6 +475,14 @@ they ever switch to the Apple backend.
 
 The crash that caused the `c61cdc7` revert does not reproduce with the restored design:
 `scripts/wake-word-crash-repro.sh` is 6/6 clean, and no crash report exists after 22:31.
+
+**Two bugs found by using it, both worth remembering.** The starting "лошадка" stopped the
+dictation it had just started, because both backends re-report a growing utterance from its
+beginning and the word stayed in every later result — fixed by `consumeSegment()`, not by the
+cooldown, which only covered the first seconds. And wake word removal from the transcript had
+been silently off for everyone forever: `bool(forKey:)` answers false for a key `@AppStorage`
+never writes. Check that pattern elsewhere — it fails in exactly the direction that looks
+like the feature is on.
 
 Earlier in the day (same session): multi-language selection was reworked — see
 the **Language selection (fork feature)** section above for the design and the Parakeet
@@ -508,10 +519,15 @@ Next steps / open questions:
 - Local commits are unpushed by design — check `git log origin/main..main` and push with
   `--force-with-lease` (history is rebased, so a plain push is rejected).
 - `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
-- **Not verified end to end: the full toggle round trip.** Starting by voice and firing on
-  the spoken word are both observed. Not yet watched from start to finish: say "лошадка",
-  dictate, say "лошадка", and confirm the text lands in the field *without* either wake word
-  in it. The tail-stripping has unit tests (`TrailingWakeWordRemovalTests`) but no live run.
+- **Next task, and the only known rough edge: the first word is lost if the speaker does not
+  pause after the wake word.** `f7a9f9a` cut the worst of it — `firstPartialSamples` was
+  32_000 (2 s), so with no VAD speech-end event nothing was transcribed and recording had not
+  started yet; it is 12_000 (0.75 s) now. **That change is committed and installed but was
+  never observed working** — the user was asked to test and the session ended first. Verify
+  before doing anything else. The residual gap is irreducible by tuning: the word must be
+  spoken, recognised, and the recorder started. The complete fix is a pre-roll, handing the
+  detector's own buffered audio to the recording, which means reaching into how `Recorder`
+  writes its WAV. Offered to the user, not started.
 - Also unverified, carried over: unplug → "not connected" warning with the built-in mic NOT
   taken; replug into a *different* port → rebinds by itself.
 - Worth watching now that the detector holds the microphone through a recording: two AUHAL
