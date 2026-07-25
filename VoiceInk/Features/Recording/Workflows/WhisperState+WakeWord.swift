@@ -83,6 +83,8 @@ extension VoiceInkEngine {
         isWakeWordListening = service.isListening
         wakeWordMicrophoneUnavailable = service.microphoneUnavailable
         wakeWordBoundDeviceName = service.boundDeviceName
+        wakeWordFailureMessage = service.failureMessage
+        wakeWordUsingServerRecognition = service.usingServerRecognition
     }
 
     /// Handle wake word detection - trigger recording
