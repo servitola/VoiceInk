@@ -12,7 +12,12 @@ import FluidAudio
 /// only when it reports speech does the recognizer collect a segment and hand it
 /// to the model. Long utterances are transcribed incrementally so "лошадка,
 /// сделай X" triggers on the first word instead of after the whole sentence.
-final class LocalWakeWordRecognizer: WakeWordRecognizer {
+///
+/// An actor, deliberately: `start`/`stop` arrive from the main actor while the
+/// processing task appends to the very same buffers on another thread, and
+/// concurrently mutating a Swift array corrupts the heap - which then surfaces
+/// as a crash somewhere entirely unrelated.
+actor LocalWakeWordRecognizer: WakeWordRecognizer {
 
     // MARK: - Tuning
 
@@ -44,8 +49,13 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
     private var vad: VadManager?
     private var vadState = VadStreamState.initial()
 
-    private var audioContinuation: AsyncStream<[Float]>.Continuation?
+    /// Written on start/stop, read from the realtime audio thread, so it cannot
+    /// live in the actor's isolated state.
+    private nonisolated let continuationBox = OSAllocatedUnfairLock<
+        AsyncStream<[Float]>.Continuation?
+    >(initialState: nil)
     private var processingTask: Task<Void, Never>?
+    private var isRunning = false
 
     private var onTranscript: ((String) -> Void)?
     private var onFailure: ((Error) -> Void)?
@@ -64,10 +74,10 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
 
     // MARK: - WakeWordRecognizer
 
-    let displayName = String(localized: "Local model (offline)")
-    let usesServerRecognition = false
+    nonisolated let displayName = String(localized: "Local model (offline)")
+    nonisolated let usesServerRecognition = false
     /// A local model has no session that expires, so nothing has to be cycled.
-    let needsRollingRestart = false
+    nonisolated let needsRollingRestart = false
 
     init(transcriber: FluidAudioTranscriptionService, modelName: String, languages: [String]) {
         self.transcriber = transcriber
@@ -101,7 +111,8 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
 
         let (stream, continuation) = AsyncStream<[Float]>.makeStream(
             bufferingPolicy: .bufferingNewest(96))
-        audioContinuation = continuation
+        continuationBox.withLock { $0 = continuation }
+        isRunning = true
 
         processingTask = Task { [weak self] in
             for await samples in stream {
@@ -115,15 +126,22 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
         )
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) {
-        guard let continuation = audioContinuation else { return }
+    nonisolated func append(_ buffer: AVAudioPCMBuffer) {
+        let continuation = continuationBox.withLock { $0 }
+        guard continuation != nil else { return }
         guard let mono = Self.monoSamples(from: buffer), !mono.isEmpty else { return }
-        continuation.yield(mono)
+        continuation?.yield(mono)
     }
 
     func stop() async {
-        audioContinuation?.finish()
-        audioContinuation = nil
+        isRunning = false
+
+        let continuation = continuationBox.withLock { current -> AsyncStream<[Float]>.Continuation? in
+            let existing = current
+            current = nil
+            return existing
+        }
+        continuation?.finish()
 
         processingTask?.cancel()
         processingTask = nil
@@ -145,37 +163,59 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return nil }
 
+        let channelCount = Int(buffer.format.channelCount)
+        guard channelCount > 0 else { return nil }
+        // For an interleaved buffer only channel pointer 0 is valid and the
+        // samples sit `stride` apart; indexing channelData[1] would read past
+        // the pointer array.
+        let isInterleaved = buffer.format.isInterleaved
+        let stride = buffer.stride
+        let scale = 1 / Float(channelCount)
+
         if let channels = buffer.floatChannelData {
-            let channelCount = Int(buffer.format.channelCount)
-            if channelCount == 1 {
+            if channelCount == 1, !isInterleaved {
                 return Array(UnsafeBufferPointer(start: channels[0], count: frameCount))
             }
+
             var mono = [Float](repeating: 0, count: frameCount)
-            for channel in 0..<channelCount {
-                let data = channels[channel]
+            if isInterleaved {
+                let data = channels[0]
                 for frame in 0..<frameCount {
-                    mono[frame] += data[frame]
+                    var sum: Float = 0
+                    for channel in 0..<channelCount {
+                        sum += data[frame * stride + channel]
+                    }
+                    mono[frame] = sum * scale
                 }
-            }
-            let scale = 1 / Float(channelCount)
-            for frame in 0..<frameCount {
-                mono[frame] *= scale
+            } else {
+                for channel in 0..<channelCount {
+                    let data = channels[channel]
+                    for frame in 0..<frameCount {
+                        mono[frame] += data[frame] * scale
+                    }
+                }
             }
             return mono
         }
 
         if let channels = buffer.int16ChannelData {
-            let channelCount = Int(buffer.format.channelCount)
             var mono = [Float](repeating: 0, count: frameCount)
-            for channel in 0..<channelCount {
-                let data = channels[channel]
+            if isInterleaved {
+                let data = channels[0]
                 for frame in 0..<frameCount {
-                    mono[frame] += Float(data[frame]) / 32_768
+                    var sum: Float = 0
+                    for channel in 0..<channelCount {
+                        sum += Float(data[frame * stride + channel]) / 32_768
+                    }
+                    mono[frame] = sum * scale
                 }
-            }
-            let scale = 1 / Float(channelCount)
-            for frame in 0..<frameCount {
-                mono[frame] *= scale
+            } else {
+                for channel in 0..<channelCount {
+                    let data = channels[channel]
+                    for frame in 0..<frameCount {
+                        mono[frame] += Float(data[frame]) / 32_768 * scale
+                    }
+                }
             }
             return mono
         }
@@ -226,9 +266,10 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
     // MARK: - Processing
 
     private func consume(_ nativeSamples: [Float]) async {
+        guard isRunning else { return }
         pending.append(contentsOf: resample(nativeSamples))
 
-        while pending.count >= Self.vadChunkSamples {
+        while isRunning, pending.count >= Self.vadChunkSamples {
             let chunk = Array(pending.prefix(Self.vadChunkSamples))
             pending.removeFirst(Self.vadChunkSamples)
             await process(chunk: chunk)
@@ -237,7 +278,7 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
     }
 
     private func process(chunk: [Float]) async {
-        guard let vad else { return }
+        guard isRunning, let vad else { return }
 
         let result: VadStreamResult
         do {
@@ -247,6 +288,9 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
             onFailure?(error)
             return
         }
+
+        // stop() may have run while the VAD was busy.
+        guard isRunning else { return }
         vadState = result.state
 
         if isInSpeech {
@@ -298,6 +342,7 @@ final class LocalWakeWordRecognizer: WakeWordRecognizer {
         do {
             let text = try await transcriber.transcribeForWakeWord(
                 samples, modelName: modelName, languages: languages)
+            guard isRunning else { return }
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             onTranscript?(text)
         } catch {
