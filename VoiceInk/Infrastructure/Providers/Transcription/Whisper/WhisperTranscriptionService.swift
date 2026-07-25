@@ -8,10 +8,16 @@ class WhisperTranscriptionService: TranscriptionService {
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "WhisperTranscriptionService")
     private let modelsDirectory: URL
     private weak var modelProvider: (any WhisperModelProvider)?
+    private let reuseLoadedContext: Bool
 
-    init(modelsDirectory: URL, modelProvider: (any WhisperModelProvider)? = nil) {
+    init(
+        modelsDirectory: URL,
+        modelProvider: (any WhisperModelProvider)? = nil,
+        reuseLoadedContext: Bool = true
+    ) {
         self.modelsDirectory = modelsDirectory
         self.modelProvider = modelProvider
+        self.reuseLoadedContext = reuseLoadedContext
     }
 
     func transcribe(audioURL: URL, model: any TranscriptionModel, context: TranscriptionRequestContext) async throws
@@ -24,7 +30,8 @@ class WhisperTranscriptionService: TranscriptionService {
         logger.notice("Initiating local transcription for model: \(model.displayName, privacy: .public)")
 
         // Check if the required model is already loaded in the model provider
-        if let provider = modelProvider,
+        if reuseLoadedContext,
+            let provider = modelProvider,
             await provider.isModelLoaded,
             let loadedContext = await provider.whisperContext,
             await provider.loadedWhisperModel?.name == model.name
