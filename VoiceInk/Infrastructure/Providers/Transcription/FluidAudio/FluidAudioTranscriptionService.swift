@@ -286,6 +286,45 @@ class FluidAudioTranscriptionService: TranscriptionService {
         }
     }
 
+    // MARK: - Wake word
+
+    /// Loads the model ahead of time so the first speech segment is not lost
+    /// while the Neural Engine warms up.
+    func prepareForWakeWord(modelName: String) async throws {
+        try await ensureModelsLoaded(for: FluidAudioModelManager.asrVersion(for: modelName))
+    }
+
+    /// One-shot transcription of a short in-memory segment.
+    ///
+    /// The wake word detector hands over independent snippets of speech, so the
+    /// decoder state is fresh every call - unlike the streaming managers, which
+    /// carry state between chunks of one continuous utterance.
+    func transcribeForWakeWord(_ samples: [Float], modelName: String, languages: [String]) async throws
+        -> String
+    {
+        guard !FluidAudioModelManager.isParakeetUnifiedModel(named: modelName),
+            !FluidAudioModelManager.isNemotronModel(named: modelName)
+        else {
+            throw WakeWordRecognizerError.unsupportedModel(modelName)
+        }
+
+        try await ensureModelsLoaded(for: FluidAudioModelManager.asrVersion(for: modelName))
+
+        guard let asrManager = asrManager else {
+            throw ASRError.notInitialized
+        }
+
+        let languageHint = FluidAudioModelManager.languageHint(from: languages, for: modelName)
+        var decoderState = TdtDecoderState.make(decoderLayers: await asrManager.decoderLayerCount)
+        let result = try await asrManager.transcribe(
+            samples,
+            decoderState: &decoderState,
+            language: languageHint
+        )
+
+        return result.text
+    }
+
     // Releases ASR/VAD resources but preserves cached models for reuse
     func cleanup() async {
         await cleanupLoadedManagers()
@@ -312,6 +351,16 @@ class FluidAudioTranscriptionService: TranscriptionService {
     }
 
     func transcribe(audioURL: URL, model: any TranscriptionModel, context: TranscriptionRequestContext) async throws
+        -> String
+    {
+        throw FluidAudioUnavailableError.notSupportedOnIntel
+    }
+
+    func prepareForWakeWord(modelName: String) async throws {
+        throw FluidAudioUnavailableError.notSupportedOnIntel
+    }
+
+    func transcribeForWakeWord(_ samples: [Float], modelName: String, languages: [String]) async throws
         -> String
     {
         throw FluidAudioUnavailableError.notSupportedOnIntel

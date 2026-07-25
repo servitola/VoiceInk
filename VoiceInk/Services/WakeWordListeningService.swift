@@ -43,9 +43,12 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "WakeWordListeningService")
 
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    /// Recognition backend for the current session. The service owns the audio
+    /// engine and the device binding; the backend only turns audio into text.
+    private var recognizer: WakeWordRecognizer?
+    /// Supplies a backend for the configured engine. Injected so the service
+    /// does not have to know about transcription services.
+    private let makeRecognizer: (WakeWordEngineKind, String) -> WakeWordRecognizer
     private var audioEngine: AVAudioEngine?
     private var boundDeviceID: AudioDeviceID?
     private var deviceChangeObserver: NSObjectProtocol?
@@ -55,6 +58,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
     /// checks it before touching shared state, so overlapping restarts cannot
     /// stomp each other's engine and leave the microphone held open.
     private var generation = 0
+    private var startTask: Task<Void, Never>?
     private var pendingRestartTask: Task<Void, Never>?
     private var restartBackoffSeconds: UInt64 = 1
 
@@ -72,6 +76,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     private var wakeWord: String = "лошадка"
     private var language: String = "ru-RU"
+    private var engineKind: WakeWordEngineKind = .localModel
     /// UID of the microphone to listen on. Empty = follow the app's recording device selection.
     private var microphoneUID: String = ""
     /// Stable identity of that microphone — USB UIDs embed the port location ID
@@ -94,7 +99,8 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     // MARK: - Initialization
 
-    override init() {
+    init(makeRecognizer: @escaping (WakeWordEngineKind, String) -> WakeWordRecognizer) {
+        self.makeRecognizer = makeRecognizer
         super.init()
         loadSettings()
         checkPermissions()
@@ -108,8 +114,49 @@ class WakeWordListeningService: NSObject, ObservableObject {
         language = UserDefaults.standard.string(forKey: "wakeWordLanguage") ?? "ru-RU"
         microphoneUID = UserDefaults.standard.wakeWordMicrophoneUID ?? ""
         microphoneModelUID = UserDefaults.standard.wakeWordMicrophoneModelUID
+        engineKind =
+            UserDefaults.standard.wakeWordEngine.flatMap(WakeWordEngineKind.init(rawValue:))
+            ?? .localModel
 
-        logger.notice("Wake word settings loaded: '\(self.wakeWord)', language: \(self.language)")
+        logger.notice(
+            "Wake word settings loaded: '\(self.wakeWord)', language: \(self.language), engine: \(self.engineKind.rawValue, privacy: .public)"
+        )
+    }
+
+    /// Switch between the local model and Apple's recognizer.
+    func configureEngine(_ kind: WakeWordEngineKind) {
+        guard engineKind != kind else { return }
+        engineKind = kind
+        UserDefaults.standard.wakeWordEngine = kind.rawValue
+
+        consecutiveImmediateFailures = 0
+        restartBackoffSeconds = 1
+        onDeviceRecognitionDisabled = false
+
+        logger.notice("Wake word engine set to \(kind.rawValue, privacy: .public)")
+
+        if isListening {
+            Task {
+                await stopListening()
+                await startListening()
+            }
+        }
+    }
+
+    /// Change the local model used for detection.
+    func configureLocalModel(named modelName: String) {
+        UserDefaults.standard.wakeWordModelName = modelName
+        consecutiveImmediateFailures = 0
+        restartBackoffSeconds = 1
+
+        logger.notice("Wake word local model set to \(modelName, privacy: .public)")
+
+        if isListening, engineKind == .localModel {
+            Task {
+                await stopListening()
+                await startListening()
+            }
+        }
     }
 
     /// Select the microphone the wake word detector listens on.
@@ -214,13 +261,34 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     // MARK: - Listening Control
 
+    /// Serialises starts. Bringing a local model up takes hundreds of
+    /// milliseconds, and several callers race at launch (auto-start, the device
+    /// list arriving, the idle-state hook) - without this they all get past the
+    /// `isListening` check and each loads a model before the generation token
+    /// discards all but the last.
     func startListening() async {
+        if let inFlight = startTask {
+            await inFlight.value
+        }
+
         guard !isListening else {
             logger.notice("Already listening, ignoring start request")
             return
         }
 
-        if permissionStatus != .authorized {
+        let task = Task { await performStart() }
+        startTask = task
+        await task.value
+        if startTask == task {
+            startTask = nil
+        }
+    }
+
+    private func performStart() async {
+
+        // Only Apple's recognizer needs the Speech Recognition entitlement; a
+        // local model just reads microphone audio.
+        if engineKind == .appleSpeech, permissionStatus != .authorized {
             logger.error("Cannot start listening: Speech recognition not authorized")
             let authorized = await requestPermissions()
             if !authorized {
@@ -260,17 +328,14 @@ class WakeWordListeningService: NSObject, ObservableObject {
         pendingRestartTask?.cancel()
         pendingRestartTask = nil
 
-        recognitionTask?.cancel()
-        recognitionTask = nil
-
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
         audioEngine = nil
 
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
+        await recognizer?.stop()
+        recognizer = nil
 
         recognizedTextBuffer.removeAll()
         boundDeviceID = nil
@@ -286,18 +351,8 @@ class WakeWordListeningService: NSObject, ObservableObject {
     // MARK: - Speech Recognition
 
     private func startRecognition(generation myGeneration: Int) async throws {
-        // Cancel any existing task
-        recognitionTask?.cancel()
-        recognitionTask = nil
-
-        // Create speech recognizer for the configured language
-        let locale = Locale(identifier: language)
-        speechRecognizer = SFSpeechRecognizer(locale: locale)
-
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            logger.error("Speech recognizer not available for language: \(self.language)")
-            throw WakeWordError.recognizerNotAvailable
-        }
+        await recognizer?.stop()
+        recognizer = nil
 
         guard let device = resolveInputDevice() else {
             microphoneUnavailable = !microphoneUID.isEmpty
@@ -332,22 +387,31 @@ class WakeWordListeningService: NSObject, ObservableObject {
             throw WakeWordError.audioEngineFailure
         }
 
-        // Create recognition request
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        // Server-side recognition caps a single request at about a minute and is
-        // rate limited, which an always-on listener hits constantly - and it would
-        // stream the room to Apple around the clock. Stay on device when possible.
-        // supportsOnDeviceRecognition can still report true while the language
-        // asset is missing, so this falls back to the server after repeated
-        // immediate failures.
-        let useOnDevice = speechRecognizer.supportsOnDeviceRecognition && !onDeviceRecognitionDisabled
-        request.requiresOnDeviceRecognition = useOnDevice
+        let backend = makeRecognizer(engineKind, language)
+        if let apple = backend as? AppleSpeechWakeWordRecognizer {
+            apple.onDeviceDisabled = onDeviceRecognitionDisabled
+        }
 
-        // The tap runs on a realtime audio thread, so it captures the request
-        // directly and never touches actor-isolated state.
+        try await backend.start(
+            inputFormat: recordingFormat,
+            onTranscript: { [weak self] text in
+                Task { @MainActor [weak self] in
+                    guard let self, myGeneration == self.generation else { return }
+                    self.handleRecognizedText(text)
+                }
+            },
+            onFailure: { [weak self] error in
+                Task { @MainActor [weak self] in
+                    guard let self, myGeneration == self.generation else { return }
+                    self.handleRecognitionFailure(error)
+                }
+            }
+        )
+
+        // The tap runs on a realtime audio thread and hands buffers straight to
+        // the backend, which is responsible for staying non-blocking there.
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
+            backend.append(buffer)
         }
 
         // Start audio engine
@@ -356,46 +420,33 @@ class WakeWordListeningService: NSObject, ObservableObject {
             try audioEngine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
+            await backend.stop()
             throw error
         }
 
         guard myGeneration == generation else {
             inputNode.removeTap(onBus: 0)
             audioEngine.stop()
-            request.endAudio()
+            await backend.stop()
             return
         }
 
         self.audioEngine = audioEngine
-        self.recognitionRequest = request
+        self.recognizer = backend
         self.boundDeviceID = device.id
         self.boundDeviceName = device.name
         self.microphoneUnavailable = false
         self.sessionStartedAt = Date()
-        self.sessionUsedOnDeviceRecognition = useOnDevice
-        self.usingServerRecognition = !useOnDevice
+        self.sessionUsedOnDeviceRecognition = !backend.usesServerRecognition
+        self.usingServerRecognition = backend.usesServerRecognition
 
         logger.notice(
-            "Wake word listening on device \(device.id, privacy: .public) '\(device.name, privacy: .public)', onDevice recognition: \(useOnDevice, privacy: .public)"
+            "Wake word listening on device \(device.id, privacy: .public) '\(device.name, privacy: .public)' via \(self.engineKind.rawValue, privacy: .public), server recognition: \(backend.usesServerRecognition, privacy: .public)"
         )
 
-        // Start recognition task
-        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self = self, myGeneration == self.generation else { return }
-
-                if let error = error {
-                    self.handleRecognitionFailure(error)
-                    return
-                }
-
-                if let result = result {
-                    self.handleRecognitionResult(result)
-                }
-            }
+        if backend.needsRollingRestart {
+            scheduleRestart(after: UInt64.random(in: rollingRestartRange), reason: "rolling restart")
         }
-
-        scheduleRestart(after: UInt64.random(in: rollingRestartRange), reason: "rolling restart")
     }
 
     /// Decides what to do about a failed recognition session.
@@ -423,7 +474,9 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
         consecutiveImmediateFailures += 1
 
-        if consecutiveImmediateFailures >= 3 && sessionUsedOnDeviceRecognition {
+        // Only Apple's recognizer has a server to fall back to. A local model
+        // that fails has nowhere else to go.
+        if consecutiveImmediateFailures >= 3, sessionUsedOnDeviceRecognition, engineKind == .appleSpeech {
             logger.error("On-device recognition is unusable for \(self.language, privacy: .public) - falling back to server recognition")
             onDeviceRecognitionDisabled = true
             consecutiveImmediateFailures = 0
@@ -513,13 +566,16 @@ class WakeWordListeningService: NSObject, ObservableObject {
         }
     }
 
-    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
+    private func handleRecognizedText(_ text: String) {
         // Recognition is demonstrably working - forget earlier failures.
         consecutiveImmediateFailures = 0
         restartBackoffSeconds = 1
 
-        let transcription = result.bestTranscription.formattedString.lowercased()
+        let transcription = text.lowercased()
         lastRecognizedText = transcription
+
+        // Length only - the content is whatever was said in the room.
+        logger.debug("Recognized \(transcription.count, privacy: .public) characters")
 
         // Add to buffer
         recognizedTextBuffer.append(transcription)
@@ -610,12 +666,10 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     deinit {
         pendingRestartTask?.cancel()
-        recognitionTask?.cancel()
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
-        recognitionRequest?.endAudio()
         if let observer = deviceChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
