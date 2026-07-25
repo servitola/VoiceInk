@@ -4,7 +4,11 @@ import os.log
 #if canImport(FluidAudio)
 import FluidAudio
 
-class FluidAudioTranscriptionService: TranscriptionService {
+/// An actor because the loaded managers are shared: dictation, the launch
+/// prewarm, the streaming provider and the wake word detector all reach for the
+/// same instance from different tasks. Mutating `asrManager` / `cachedModels`
+/// from two of them at once over-releases the model and corrupts the heap.
+actor FluidAudioTranscriptionService: TranscriptionService {
     private var asrManager: AsrManager?
     private var unifiedAsrManager: UnifiedAsrManager?
     private var nemotronAsrManager: StreamingNemotronMultilingualAsrManager?
