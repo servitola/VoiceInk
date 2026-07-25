@@ -11,6 +11,7 @@ struct WakeWordSettingsView: View {
     @AppStorage("wakeWordEngine") private var wakeWordEngine = WakeWordEngineKind.localModel.rawValue
     @AppStorage("wakeWordModelName") private var wakeWordModelName = ""
     @AppStorage("removeWakeWordFromTranscription") private var removeWakeWordFromTranscription = true
+    @AppStorage("wakeWordStopsRecording") private var wakeWordStopsRecording = true
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var tempWakeWord: String = ""
@@ -327,6 +328,27 @@ struct WakeWordSettingsView: View {
                 .fontWeight(.semibold)
 
             VStack(spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Say it again to finish")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Text("The wake word ends dictation too, exactly as pressing the shortcut a second time does. The detector keeps the microphone while recording so it can hear you.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    Toggle("", isOn: $wakeWordStopsRecording)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .padding()
+
+                Divider()
+
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Remove wake word from transcription")

@@ -94,6 +94,20 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
     @Published var recordingState: RecordingState = .idle {
         didSet {
+            guard recordingState != oldValue else { return }
+
+            // When the wake word also ends dictation the detector listens right
+            // through the recording, so it has to be released once the recording
+            // is over: past this point there is nothing left to stop, and its
+            // model would otherwise queue up behind the one transcribing the
+            // dictation on the same shared service.
+            if oldValue == .recording, recordingState != .idle, isWakeWordListening {
+                Task { [weak self] in
+                    await self?.stopWakeWordListening()
+                }
+                return
+            }
+
             // Wake word listening resumes on the actual return to idle. The panel
             // dismiss hook fires from inside the pipeline, while the state is still
             // .transcribing/.enhancing, so it cannot be the only trigger.
@@ -245,8 +259,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
                 await cleanupResources()
             }
         } else {
-            // Stop wake word listening when starting manual recording
-            if isWakeWordListening {
+            // Hand the microphone over for manual recording - unless the wake
+            // word is also what ends dictation, in which case the detector has
+            // to keep listening through the recording to hear it.
+            if isWakeWordListening, !UserDefaults.standard.wakeWordStopsRecording {
                 await stopWakeWordListening()
             }
 
