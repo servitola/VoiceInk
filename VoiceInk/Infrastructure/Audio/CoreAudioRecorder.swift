@@ -202,6 +202,31 @@ final class CoreAudioRecorder: @unchecked Sendable {
         }
     }
 
+    /// Starts capture without writing a file, delivering 16 kHz mono PCM through
+    /// `onAudioChunk` only.
+    ///
+    /// Wake word detection needs a continuously open microphone but must not
+    /// litter the disk with hours of WAV. Everything else - device binding,
+    /// the realtime render callback, the lock-free handoff to the processing
+    /// queue - is shared with file recording, which is the point: this is the
+    /// capture path that is known to work on this app's supported devices.
+    func startCapture(deviceID: AudioDeviceID) throws {
+        stopRecording()
+
+        try prepare(deviceID: deviceID)
+
+        do {
+            recordingURL = nil
+            resetAudioProcessingState()
+            try startAudioUnit()
+        } catch {
+            isRecording = false
+            recordingActive.store(false, ordering: .releasing)
+            teardownPreparedAudioUnit()
+            throw error
+        }
+    }
+
     /// Stops the current recording
     func stopRecording() {
         guard isRecording || audioFile != nil else {
@@ -945,7 +970,7 @@ final class CoreAudioRecorder: @unchecked Sendable {
             }
 
             let slot = inputBufferSlots[Int(readIndex % UInt64(inputBufferSlots.count))]
-            convertAndWriteToFile(
+            convertAndDeliver(
                 inputSamples: slot.samples,
                 frameCount: slot.frameCount,
                 inputChannels: slot.channelCount,
@@ -995,14 +1020,17 @@ final class CoreAudioRecorder: @unchecked Sendable {
         audioProcessingScheduled.store(false, ordering: .relaxed)
     }
 
-    private func convertAndWriteToFile(
+    /// Downmixes and resamples one queued buffer, writes it to the output file
+    /// when there is one, and hands the same PCM to `onAudioChunk`.
+    ///
+    /// The file is optional: capture-only clients (wake word detection) want the
+    /// 16 kHz mono stream without leaving a WAV on disk.
+    private func convertAndDeliver(
         inputSamples: UnsafeMutablePointer<Float32>,
         frameCount: UInt32,
         inputChannels: UInt32,
         inputSampleRate: Double
     ) {
-        guard let file = audioFile else { return }
-
         let outputSampleRate = outputFormat.mSampleRate
 
         // Calculate output frame count after sample rate conversion
@@ -1056,19 +1084,21 @@ final class CoreAudioRecorder: @unchecked Sendable {
             }
         }
 
-        // Write to file
-        var outputBufferList = AudioBufferList(
-            mNumberBuffers: 1,
-            mBuffers: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: outputFrameCount * 2,
-                mData: outputBuffer
+        // Write to file, when this capture has one.
+        if let file = audioFile {
+            var outputBufferList = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: 1,
+                    mDataByteSize: outputFrameCount * 2,
+                    mData: outputBuffer
+                )
             )
-        )
 
-        let writeStatus = ExtAudioFileWrite(file, outputFrameCount, &outputBufferList)
-        if writeStatus != noErr {
-            logger.error("🎙️ ExtAudioFileWrite failed with status: \(writeStatus, privacy: .public)")
+            let writeStatus = ExtAudioFileWrite(file, outputFrameCount, &outputBufferList)
+            if writeStatus != noErr {
+                logger.error("🎙️ ExtAudioFileWrite failed with status: \(writeStatus, privacy: .public)")
+            }
         }
 
         // Send the same PCM data to the streaming callback if set.
