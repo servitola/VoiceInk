@@ -306,6 +306,18 @@ struct WakeWordSettingsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+
+                        if let failure = voiceInkEngine.wakeWordFailureMessage {
+                            Text(failure)
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+
+                        if voiceInkEngine.wakeWordUsingServerRecognition {
+                            Text("On-device recognition is unavailable, so audio is sent to Apple's servers while listening. Turn on System Settings → Keyboard → Dictation to keep it offline.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
                     }
                 }
 
