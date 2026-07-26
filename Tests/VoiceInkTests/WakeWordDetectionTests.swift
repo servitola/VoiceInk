@@ -38,14 +38,12 @@ struct WakeWordDetectionTests {
     private func trigger(
         in text: String,
         send: String = "отправляй",
-        command: [String] = [],
         isRecording: Bool,
         stopsRecording: Bool = true
     ) -> WakeWordTrigger? {
         WakeWordListeningService.selectTrigger(
             primary: "лошадка",
             send: send,
-            command: command,
             in: text,
             isRecording: isRecording,
             stopsRecording: stopsRecording
@@ -85,41 +83,21 @@ struct WakeWordDetectionTests {
         #expect(trigger(in: "отправляй уже", send: "", isRecording: true) == nil)
     }
 
-    // MARK: - The command word
+    // MARK: - The command word is not a wake word
 
-    @Test func commandWordStartsDictationWhenIdle() {
-        #expect(trigger(in: "серго открой телеграм", command: ["серго"], isRecording: false) == .command)
-    }
-
-    @Test func anyOfTheModesTriggerWordsStartsIt() {
-        // The words are the mode's own trigger words, and a mode may have several.
-        let words = ["серго", "бот"]
-        #expect(trigger(in: "бот перезапусти сервис", command: words, isRecording: false) == .command)
-    }
-
-    /// Mid-dictation the word is just part of what is being said. Treating it as
-    /// a command there would cut the sentence that mentions it in half.
-    @Test func commandWordIsIgnoredWhileRecording() {
-        #expect(trigger(in: "напиши что серго молодец", command: ["серго"], isRecording: true) == nil)
-    }
-
-    /// It names one specific destination; the primary word only means "dictate
-    /// somewhere, work out where later".
-    @Test func commandWordWinsOverPrimaryWhenIdle() {
-        #expect(
-            trigger(in: "лошадка серго открой телеграм", command: ["серго"], isRecording: false)
-                == .command)
-    }
-
-    @Test func noCommandWordsConfiguredMeansNoCommandTrigger() {
+    /// The word that routes a dictation to a mode must never reach the detector.
+    /// Starting recordings is the start word's job, and a detector that answered
+    /// to the command word would open one every time it was mentioned aloud.
+    @Test func aModesTriggerWordDoesNotStartADictation() {
         #expect(trigger(in: "серго открой телеграм", isRecording: false) == nil)
-        #expect(trigger(in: "лошадка привет", isRecording: false) == .primary)
+        #expect(trigger(in: "лошадка серго открой телеграм", isRecording: false) == .primary)
     }
 
-    @Test func commandWordDoesNotStealTheSendWordsJob() {
-        // Both are heard mid-dictation; only the send word may act.
-        #expect(
-            trigger(in: "серго привет отправляй", command: ["серго"], isRecording: true) == .send)
+    /// It is an ordinary word of the text mid-dictation, so it must not end one
+    /// either — that would cut the sentence mentioning it in half.
+    @Test func aModesTriggerWordDoesNotFinishADictation() {
+        #expect(trigger(in: "напиши что серго молодец", isRecording: true) == nil)
+        #expect(trigger(in: "серго привет отправляй", isRecording: true) == .send)
     }
 
     // MARK: - Levenshtein

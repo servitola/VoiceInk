@@ -426,39 +426,33 @@ exact-or-Levenshtein test), and `removeWakeWord` now strips the send phrase off 
 unconditionally — it always ends dictation, whatever the primary word's own switch says —
 before the existing primary-word tail and head passes.
 
-**The command word: a third word, and it starts somewhere else.** `wakeWordCommandModeId`
-(unset by default) names a Mode. Saying one of *that Mode's own trigger words* while idle
-starts a dictation in it, so the text goes wherever the Mode sends it — a `.customCommand`
-Mode shells out, and the dictation never touches the focused app. Hands-free: no primary
-wake word in front of it. Three things about it are not obvious.
+**The command word: a third word, and it is deliberately not a wake word.** Say the start
+word, then a word of your choosing, and the rest of the dictation is a command: it goes to
+the Mode that word belongs to instead of the focused app — a `.customCommand` Mode shells
+out, so the text never reaches whatever has focus. `wakeWordCommandModeId` (unset by
+default) names that Mode; the Wake Word settings screen edits the word itself, in a field
+beside the other two.
 
-*Only the Mode is stored, never the words.* The spoken words are read back out of
-`ModeConfig.triggerWords` on launch and again on every `.modeConfigurationsDidChange`. That
-is not laziness — it is what guarantees the word that opened the recording is the same one
-`ModeTriggerWordDetectionService` later strips out of the transcript and uses to select the
-Mode. Two settings could drift apart and leave the word wedged in the middle of the command;
-one cannot. It also means a Mode that was deleted, disabled or stripped of its trigger words
-simply disarms the wake word, which is right: an armed word pointing at a Mode that no longer
-exists would paste the command into whatever has focus.
+*The detector must never answer to it.* An earlier version made it a real third wake word
+that started a dictation hands-free, and that was wrong: starting recordings is the start
+word's job, and a detector that answers to the command word opens a recording every time the
+word is said aloud. `WakeWordTrigger` therefore has no `command` case at all — the word
+never reaches `selectTrigger`. `aModesTriggerWordDoesNotStartADictation` and its sibling are
+there to keep it that way.
 
-*It only ever starts.* `selectTrigger` checks command words only in the idle branch, ahead of
-the primary word (it names one specific destination; the primary word means "dictate
-somewhere, work out where later"). Mid-dictation the word is just part of what is being said,
-and firing there would cut the sentence that mentions it in half.
+*The word is stored as the Mode's trigger word, not as a setting of its own.* The transcript
+side already works this way: `ModeTriggerWordDetectionService`, called from
+`TranscriptionPipeline.run` *before* the output configuration is resolved, is what matches
+the word mid-dictation, selects the Mode and strips the word out of the text. One copy is
+what stops the word the settings screen shows from drifting away from the word the pipeline
+matches — two copies would eventually leave the command wedged in the middle of its own
+text. `configureCommandWord` writes through to `ModeConfig.triggerWords`; the settings field
+is comma-separated so a Mode that already had several trigger words keeps all of them.
 
-*It does not go through the notification.* `.toggleRecorderPanel` carries no Mode, so the
-handler resolves one from the frontmost app — exactly what a command dictation must not do.
-`handleWakeWordDetected` calls `recorderUIManager.toggleRecorderPanel(modeId:)` directly
-instead, the same entry point a per-Mode hotkey uses, which is why `RecorderPanelPresenting`
-gained that method. No new one-shot override state was needed: `beginApplyingConfiguration`
-re-resolves the active Mode on *every* recording start, so the forced Mode cannot leak into
-the next dictation.
-
-Nothing is stripped from the transcript for this word, deliberately. `removeWakeWord` runs
-*before* trigger-word Mode selection in the pipeline, so stripping it there would hide it
-from the detector that needs it. If the recording caught the word, the trigger-word detector
-removes it and re-selects the same Mode; if it did not, the Mode is already right. Both paths
-land in the same place.
+*Nothing about it leaks into the next dictation.* `beginApplyingConfiguration` re-resolves
+the active Mode on *every* recording start, so a trigger-word Mode switch lasts exactly one
+dictation. `removeWakeWord` deliberately does not touch this word: it runs *before*
+trigger-word selection, so stripping it there would hide it from the detector that needs it.
 
 **Restart safety.** Every start/stop bumps a `generation` token that all async continuations
 check before touching shared state, and `stopListening()` tears down unconditionally. The old
