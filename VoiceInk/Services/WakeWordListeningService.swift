@@ -6,17 +6,22 @@ import Foundation
 import Speech
 import os
 
-/// Which of the three spoken commands the detector just heard.
+/// Which of the two spoken commands the detector just heard.
 ///
 /// `primary` is the word that starts dictation - and, when "say it again to
 /// finish" is on, ends it too. `send` only ever ends it, and additionally
-/// presses the send key once the text has been pasted. `command` starts one
-/// like `primary` does, but in a mode of its own, so the dictation goes
-/// wherever that mode sends it instead of into the focused app.
+/// presses the send key once the text has been pasted.
+///
+/// Note what is deliberately *not* here: the command word, which routes a
+/// dictation to a mode of its own. It is not a wake word at all - the
+/// detector must not answer to it, because answering would mean the word
+/// starts a recording, and the start word's job is to start recordings. The
+/// command word is only ever a marker inside a dictation the start word
+/// already opened, and it is recognised in the transcript by
+/// `ModeTriggerWordDetectionService`, not here.
 enum WakeWordTrigger: Equatable {
     case primary
     case send
-    case command
 }
 
 /// Service for continuous wake word detection using Apple Speech Recognition
@@ -112,11 +117,6 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private var wakeWord: String = "лошадка"
     /// Optional second word that finishes dictation and sends it. Empty = off.
     private var sendWakeWord: String = ""
-    /// Words that start a dictation in the command mode. These are that mode's
-    /// own trigger words, not a separate setting, so the word that starts the
-    /// recording is the same one that later selects the mode and gets stripped
-    /// out of the transcript. Empty = off.
-    private var commandWakeWords: [String] = []
     private var language: String = "ru-RU"
     /// Which backend turns audio into text. Defaults to the local model - an
     /// always-on listener on Apple's servers streams the room continuously.
@@ -291,21 +291,6 @@ class WakeWordListeningService: NSObject, ObservableObject {
         UserDefaults.standard.wakeWordSend = trimmed
 
         logger.notice("Send wake word configured: '\(trimmed.isEmpty ? "off" : trimmed)'")
-    }
-
-    /// Words that start a dictation in the command mode.
-    ///
-    /// Like `configureSendWakeWord`, this never restarts listening: the words
-    /// only take part in matching text. Pass an empty array to turn the command
-    /// wake word off.
-    func configureCommandWakeWords(_ words: [String]) {
-        commandWakeWords = words
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .filter { !$0.isEmpty }
-
-        logger.notice(
-            "Command wake words configured: \(self.commandWakeWords.isEmpty ? "off" : self.commandWakeWords.joined(separator: ", "), privacy: .public)"
-        )
     }
 
     func setWakeWordDetectedCallback(_ callback: @escaping (WakeWordTrigger) -> Void) {
@@ -901,45 +886,33 @@ class WakeWordListeningService: NSObject, ObservableObject {
         guard let trigger = Self.selectTrigger(
             primary: wakeWord,
             send: sendWakeWord,
-            command: commandWakeWords,
             in: recentText,
             isRecording: isRecordingActive?() ?? false,
             stopsRecording: stopsRecording
         ) else { return }
 
-        let word: String
-        switch trigger {
-        case .send: word = sendWakeWord
-        case .command: word = commandWakeWords.joined(separator: "/")
-        case .primary: word = wakeWord
-        }
+        let word = trigger == .send ? sendWakeWord : wakeWord
         logger.notice("🎯 Wake word detected: '\(word)' (\(String(describing: trigger), privacy: .public))")
         handleWakeWordDetection(trigger: trigger)
     }
 
     /// Decides which command, if any, the heard text carries.
     ///
-    /// Pure so the rules can be tested without a microphone. Three of the rules
-    /// are not obvious. The send word is meaningless while nothing is recording
-    /// - it finishes dictation, it never starts one. The primary word only ends
-    /// a recording when its own switch says so: a configured send word keeps the
+    /// Pure so the rules can be tested without a microphone. Two of them are not
+    /// obvious. The send word is meaningless while nothing is recording - it
+    /// finishes dictation, it never starts one. And the primary word only ends a
+    /// recording when its own switch says so: a configured send word keeps the
     /// detector listening through the whole dictation, which is the first time
     /// the primary word is audible mid-recording at all, and it must not
-    /// silently gain a power the user turned off. And a command word only ever
-    /// starts: mid-dictation it is an ordinary word of the text, and treating it
-    /// as a command there would cut the sentence that mentions it in half.
+    /// silently gain a power the user turned off.
     nonisolated static func selectTrigger(
         primary: String,
         send: String,
-        command: [String] = [],
         in text: String,
         isRecording: Bool,
         stopsRecording: Bool
     ) -> WakeWordTrigger? {
         guard isRecording else {
-            // Command wins a tie: it names one specific destination, while the
-            // primary word means "dictate somewhere, work out where later".
-            if command.contains(where: { detectWakeWord($0, in: text) }) { return .command }
             return detectWakeWord(primary, in: text) ? .primary : nil
         }
 
