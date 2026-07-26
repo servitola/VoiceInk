@@ -385,6 +385,47 @@ the next one stops it. And `removeWakeWord` strips the closing word off the tail
 the head; note its head path was rewritten to work on the trimmed text, since it used to
 re-derive everything from the original and would have discarded the tail removal.
 
+**Finish and send: the second word.** `wakeWordSend` (empty by default) is an optional second
+word that only ever *ends* dictation, and additionally presses `wakeWordSendKey` (default
+Return) once the text is pasted — dictate a message and send it without touching the keyboard.
+Four things about it are not obvious.
+
+*Which words are live depends on the state, and that decision is a pure function.*
+`WakeWordListeningService.selectTrigger(primary:send:in:isRecording:stopsRecording:)` is the
+only place the rules live: idle → only the primary word, and it starts a recording; recording
+→ the send word first (it wins a tie, being the more specific command), then the primary word
+**only if `wakeWordStopsRecording` is on**. That last clause is the subtle one. A configured
+send word forces the detector to hold the microphone for the whole recording, which is the
+first time the primary word is audible mid-dictation at all — without the clause it would
+silently gain a power the user switched off. The engine feeds state in through
+`isRecordingActive`, the sibling of `canStartListening`.
+
+*Mic ownership is now "can anything finish by voice", not "does the wake word finish".*
+`VoiceInkEngine.voiceCanFinishDictation` is that predicate and replaces the bare
+`wakeWordStopsRecording` read in `toggleRecord`, `canStartListening` and
+`handleWakeWordDetection`.
+
+*The Auto Send override is one-shot, and its lifetime is the point.* `AutoSendKey` is a
+per-Mode setting; finishing by voice overrides it for that single dictation via
+`pendingAutoSendOverride` on the engine and `OutputRuntimeConfiguration.overridingAutoSendKey`.
+It is set only when a recording is actually running, spent inside the `outputConfiguration`
+closure `runPipeline` hands the pipeline, and cleared again whenever a new recording starts.
+That last clear is not belt-and-braces: the pipeline asks for the output configuration *after*
+transcribing, so a failed transcription — or a cancellation, which never enters `runPipeline`
+at all — never spends the override, and it would sit armed to press Return into the next,
+unrelated dictation. Consuming on first read is safe because the pipeline's second call
+(`outputForDelivery ?? outputConfiguration()`) only happens for an assistant follow-up or a
+failed transcription, and delivery returns before reading `output` in both.
+
+*It is inert outside Paste modes, by construction.* `TranscriptionDelivery` gates `autoSendKey`
+on `outputMode == .paste`, so under a `.respond` or `.customCommand` Mode the send word just
+finishes the dictation. The settings copy says so rather than the code guarding it twice.
+
+`removeTrailingWakeWord` grew to match multi-word phrases (last *N* words joined, then the same
+exact-or-Levenshtein test), and `removeWakeWord` now strips the send phrase off the tail
+unconditionally — it always ends dictation, whatever the primary word's own switch says —
+before the existing primary-word tail and head passes.
+
 **Restart safety.** Every start/stop bumps a `generation` token that all async continuations
 check before touching shared state, and `stopListening()` tears down unconditionally. The old
 `guard isListening` could skip teardown after a lost race and leave the engine holding the mic.
@@ -446,7 +487,30 @@ Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
 
-Current state (2026-07-26, second wake-word session): **the whole round trip works, offline,
+**Latest (2026-07-26, third wake-word session): the "finish and send" word works, and was
+verified live** — the user dictated a message into this very chat with it and it sent itself.
+Built with `make local-stable`, installed and running; `VoiceInkTests` 76/76. Design and the
+non-obvious parts are in the wake word section above. The log of the run that proves it, with
+"лошадка" as the wake word and "авадакедавра" as the send word:
+
+```
+🎯 Wake word detected: (primary)      → 🎯 Wake word detected - starting recording
+heard: как как поступить авадакидавра?
+🎯 Wake word detected: (send)         → 🎯 Send wake word detected - finishing recording and pressing enter
+🎯 Closing wake word removed from transcription
+📝 After wake word removal: скажешь скажешь мне как поступить
+```
+
+Two things that run confirms beyond the unit tests. The send word **is** heard mid-dictation —
+9 s after the start here, comfortably past the shared 2.5 s cooldown. And the fuzzy match earns
+its keep: Parakeet returned "авадакидавра" for a configured "авадакедавра", one edit away, and
+it matched both to trigger *and* to come off the tail.
+
+Still unverified, in rough order of interest: a `.respond`-output Mode (the send word should
+just finish, no Return); ⇧⏎ / ⌘⏎ instead of Return; and the "say it again to finish" tumbler
+turned **off** while a send word is set — "лошадка" mid-dictation must then not stop anything.
+
+Previous state (2026-07-26, second wake-word session): **the whole round trip works, offline,
 and was watched end to end by the user** — which every previous session ended without ever
 seeing. Installed and running at `f7a9f9a`.
 
@@ -495,12 +559,34 @@ as a single string. The orphaned view was deleted and its toggle logic moved int
 `ModeConfigDraft.toggleLanguage`.
 
 `make local-stable` is green on arm64 **and** on the Intel path
-(`VOICEINK_TARGET_ARCH=x86_64`, verified in an earlier session), `VoiceInkTests` passes 51/51,
+(`VOICEINK_TARGET_ARCH=x86_64`, verified in an earlier session), `VoiceInkTests` passes 76/76,
 and the app is installed to `/Applications/VoiceInk.app` and running from that build.
 
-Run the unit tests with `-only-testing:VoiceInkTests`. A plain `test` also builds
-`VoiceInkUITests`, whose runner is rejected by Gatekeeper ("VoiceInkUITests-Runner is
-damaged") under the local unsigned build, failing the whole run for an unrelated reason.
+Running the unit tests takes the same flags the local *app* build takes, not just
+`-only-testing`. Unlike a plain `build`, `test` has to **launch** the host app, and it dies
+before the harness connects under anything less:
+
+```bash
+./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
+  -destination 'platform=macOS' -only-testing:VoiceInkTests \
+  -derivedDataPath build/test-dd -xcconfig LocalBuild.xcconfig \
+  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" \
+  CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" \
+  PROVISIONING_PROFILE_SPECIFIER="" \
+  CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD' \
+  test
+```
+
+Each flag earns its place, and the failure modes look nothing like each other:
+`CODE_SIGNING_ALLOWED=NO` → the app is killed at launch; the project's own
+`DEVELOPMENT_TEAM` → "entitlements require a development certificate"; a *local* signing
+cert with `DEVELOPMENT_TEAM=""` → dyld refuses `whisper.framework` and `VoiceInk.debug.dylib`
+for "different Team IDs"; and without `LOCAL_BUILD` the app aborts inside CloudKit setup,
+since ad-hoc signing cannot carry the iCloud entitlement. `-only-testing:VoiceInkTests` is
+still needed on its own account: a plain `test` also builds `VoiceInkUITests`, whose runner
+is rejected by Gatekeeper ("VoiceInkUITests-Runner is damaged") under the local unsigned
+build, failing the whole run for an unrelated reason.
 
 **Always build with `make local-stable`, never plain `make local`** — ad-hoc signing has no
 stable code identity, so every reinstall changes the cdhash, macOS drops its TCC grants, and
