@@ -54,6 +54,20 @@ extension VoiceInkEngine {
         }
         self.wakeWordService = service
 
+        // The words live on the mode, so they have to be read back out of it on
+        // every launch - and again whenever the modes change underneath us.
+        service.configureCommandWakeWords(
+            Self.commandWakeWords(for: UserDefaults.standard.wakeWordCommandModeId))
+        modeConfigurationsObserver = NotificationCenter.default.addObserver(
+            forName: .modeConfigurationsDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.wakeWordService?.configureCommandWakeWords(
+                    Self.commandWakeWords(for: UserDefaults.standard.wakeWordCommandModeId))
+            }
+        }
+
         // Auto-start if enabled in settings
         if UserDefaults.standard.bool(forKey: "isWakeWordEnabled") {
             Task {
@@ -121,6 +135,31 @@ extension VoiceInkEngine {
     /// Handle wake word detection - start recording, or finish the one running.
     @MainActor
     func handleWakeWordDetected(trigger: WakeWordTrigger) async {
+        if trigger == .command {
+            // The command word only ever starts. The detector already refuses to
+            // report it mid-recording; this is the second lock on the same door.
+            guard recordingState == .idle else {
+                logger.notice("🎯 Command wake word ignored - a dictation is already in flight")
+                return
+            }
+
+            let modeId = UserDefaults.standard.wakeWordCommandModeId
+            guard !Self.commandWakeWords(for: modeId).isEmpty, let modeId else {
+                logger.notice("🎯 Command wake word ignored - its mode is gone or disabled")
+                return
+            }
+
+            logger.notice("🎯 Command wake word detected - starting dictation in its mode")
+            if !Self.voiceCanFinishDictation {
+                isWakeWordListening = false
+            }
+            // Not the bare `toggleRecorderPanel` notification the other two words
+            // post: that path resolves the mode from the frontmost app, which is
+            // exactly what a command dictation must not do.
+            await recorderUIManager?.toggleRecorderPanel(modeId: modeId)
+            return
+        }
+
         if trigger == .send {
             // The send word only ever finishes. The detector already refuses to
             // report it while idle; this is the second lock on the same door,
@@ -193,6 +232,38 @@ extension VoiceInkEngine {
         }
 
         service.configureSendWakeWord(word)
+    }
+
+    /// Point the command wake word at a mode. Pass nil to turn it off.
+    ///
+    /// The mode's trigger words become the spoken words - see
+    /// `UserDefaults.wakeWordCommandModeId` for why they are not stored twice.
+    @MainActor
+    func configureCommandWakeWordMode(_ modeId: UUID?) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+
+        UserDefaults.standard.wakeWordCommandModeId = modeId
+        service.configureCommandWakeWords(Self.commandWakeWords(for: modeId))
+    }
+
+    /// Trigger words of the command mode, or none when it is off or gone.
+    ///
+    /// A mode that was deleted, disabled or stripped of its trigger words
+    /// leaves nothing to listen for - which is the correct answer, not a bug to
+    /// paper over: an armed wake word that starts a dictation into a mode that
+    /// no longer exists would silently paste the command into whatever has
+    /// focus.
+    @MainActor
+    static func commandWakeWords(for modeId: UUID?) -> [String] {
+        guard let modeId,
+            let mode = ModeManager.shared.configurations.first(where: { $0.id == modeId }),
+            mode.isEnabled
+        else { return [] }
+
+        return mode.triggerWords
     }
 
     /// Configure which microphone the wake word detector listens on.
