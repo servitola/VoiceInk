@@ -58,6 +58,17 @@ struct OutputRuntimeConfiguration {
     let outputMode: ModeOutputMode
     let autoSendKey: AutoSendKey
     let customCommand: ModeCustomCommand?
+
+    /// Replace the mode's Auto Send choice for this one dictation, which is what
+    /// finishing by the send wake word does.
+    func overridingAutoSendKey(_ key: AutoSendKey) -> OutputRuntimeConfiguration {
+        OutputRuntimeConfiguration(
+            mode: mode,
+            outputMode: outputMode,
+            autoSendKey: key,
+            customCommand: customCommand
+        )
+    }
 }
 
 enum ModeTranscriptionModelResolution {
