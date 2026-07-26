@@ -6,6 +6,16 @@ import Foundation
 import Speech
 import os
 
+/// Which of the two spoken commands the detector just heard.
+///
+/// `primary` is the word that starts dictation - and, when "say it again to
+/// finish" is on, ends it too. `send` only ever ends it, and additionally
+/// presses the send key once the text has been pasted.
+enum WakeWordTrigger {
+    case primary
+    case send
+}
+
 /// Service for continuous wake word detection using Apple Speech Recognition
 @MainActor
 class WakeWordListeningService: NSObject, ObservableObject {
@@ -97,6 +107,8 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private let sessionInputFrames = ManagedAtomic<UInt64>(0)
 
     private var wakeWord: String = "лошадка"
+    /// Optional second word that finishes dictation and sends it. Empty = off.
+    private var sendWakeWord: String = ""
     private var language: String = "ru-RU"
     /// Which backend turns audio into text. Defaults to the local model - an
     /// always-on listener on Apple's servers streams the room continuously.
@@ -117,16 +129,27 @@ class WakeWordListeningService: NSObject, ObservableObject {
     private var stopsRecording: Bool {
         UserDefaults.standard.object(forKey: "wakeWordStopsRecording") as? Bool ?? true
     }
+    /// Whether anything at all can end a recording by voice. A send word does it
+    /// on its own, so the microphone has to stay with the detector even when the
+    /// primary word's own stop behaviour is switched off.
+    private var listensThroughRecording: Bool {
+        stopsRecording || !sendWakeWord.isEmpty
+    }
     /// UID of the microphone to listen on. Empty = follow the app's recording device selection.
     private var microphoneUID: String = ""
     /// Stable identity of that microphone — USB UIDs embed the port location ID
     /// and change between ports, the model UID does not.
     private var microphoneModelUID: String?
-    private var onWakeWordDetected: (() -> Void)?
+    private var onWakeWordDetected: ((WakeWordTrigger) -> Void)?
 
     /// Set by the engine. The detector must not take the microphone while a
     /// recording or transcription is in flight.
     var canStartListening: (() -> Bool)?
+
+    /// Set by the engine. Which words are live depends on it: the send word only
+    /// means anything while a dictation is running, the primary word only starts
+    /// one while nothing is.
+    var isRecordingActive: (() -> Bool)?
 
     /// Supplies the app's shared FluidAudio service, so the local engine reuses
     /// the model dictation already loaded instead of holding a second copy.
@@ -156,6 +179,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
 
     private func loadSettings() {
         wakeWord = UserDefaults.standard.string(forKey: "wakeWord") ?? "лошадка"
+        sendWakeWord = UserDefaults.standard.wakeWordSend.lowercased()
         language = UserDefaults.standard.string(forKey: "wakeWordLanguage") ?? "ru-RU"
         microphoneUID = UserDefaults.standard.wakeWordMicrophoneUID ?? ""
         microphoneModelUID = UserDefaults.standard.wakeWordMicrophoneModelUID
@@ -165,7 +189,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
         localModelName = UserDefaults.standard.wakeWordModelName
 
         logger.notice(
-            "Wake word settings loaded: '\(self.wakeWord)', language: \(self.language), engine: \(self.engineKind.rawValue, privacy: .public)"
+            "Wake word settings loaded: '\(self.wakeWord)', send word: '\(self.sendWakeWord)', language: \(self.language), engine: \(self.engineKind.rawValue, privacy: .public)"
         )
     }
 
@@ -246,7 +270,22 @@ class WakeWordListeningService: NSObject, ObservableObject {
         }
     }
 
-    func setWakeWordDetectedCallback(_ callback: @escaping () -> Void) {
+    /// Set the second word, the one that finishes dictation and sends it.
+    /// Pass an empty string to turn the feature off.
+    ///
+    /// Unlike `configureWakeWord` this never restarts listening: the send word
+    /// only takes part in matching text, it has nothing to do with the audio
+    /// graph, and tearing the recogniser down here would drop a recording that
+    /// is already running.
+    func configureSendWakeWord(_ word: String) {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.sendWakeWord = trimmed.lowercased()
+        UserDefaults.standard.wakeWordSend = trimmed
+
+        logger.notice("Send wake word configured: '\(trimmed.isEmpty ? "off" : trimmed)'")
+    }
+
+    func setWakeWordDetectedCallback(_ callback: @escaping (WakeWordTrigger) -> Void) {
         self.onWakeWordDetected = callback
     }
 
@@ -836,10 +875,43 @@ class WakeWordListeningService: NSObject, ObservableObject {
             return
         }
 
-        if Self.detectWakeWord(wakeWord, in: recentText) {
-            logger.notice("🎯 Wake word detected: '\(self.wakeWord)'")
-            handleWakeWordDetection()
+        guard let trigger = Self.selectTrigger(
+            primary: wakeWord,
+            send: sendWakeWord,
+            in: recentText,
+            isRecording: isRecordingActive?() ?? false,
+            stopsRecording: stopsRecording
+        ) else { return }
+
+        let word = trigger == .send ? sendWakeWord : wakeWord
+        logger.notice("🎯 Wake word detected: '\(word)' (\(String(describing: trigger), privacy: .public))")
+        handleWakeWordDetection(trigger: trigger)
+    }
+
+    /// Decides which command, if any, the heard text carries.
+    ///
+    /// Pure so the rules can be tested without a microphone. Two of them are not
+    /// obvious. The send word is meaningless while nothing is recording - it
+    /// finishes dictation, it never starts one. And the primary word only ends a
+    /// recording when its own switch says so: a configured send word keeps the
+    /// detector listening through the whole dictation, which is the first time
+    /// the primary word is audible mid-recording at all, and it must not
+    /// silently gain a power the user turned off.
+    nonisolated static func selectTrigger(
+        primary: String,
+        send: String,
+        in text: String,
+        isRecording: Bool,
+        stopsRecording: Bool
+    ) -> WakeWordTrigger? {
+        guard isRecording else {
+            return detectWakeWord(primary, in: text) ? .primary : nil
         }
+
+        // Send wins a tie: it is the more specific of the two commands.
+        if !send.isEmpty, detectWakeWord(send, in: text) { return .send }
+        if stopsRecording, detectWakeWord(primary, in: text) { return .primary }
+        return nil
     }
 
     nonisolated static func detectWakeWord(_ wakeWord: String, in text: String) -> Bool {
@@ -899,16 +971,16 @@ class WakeWordListeningService: NSObject, ObservableObject {
         return matrix[s1Count][s2Count]
     }
 
-    private func handleWakeWordDetection() {
+    private func handleWakeWordDetection(trigger: WakeWordTrigger) {
         // Clear buffer to prevent immediate re-triggering
         recognizedTextBuffer.removeAll()
         lastDetectionAt = Date()
         lastRecognizedText = ""
 
-        // When the word also ends dictation, the detector has to keep the
+        // When a spoken word also ends dictation, the detector has to keep the
         // microphone through the recording - stopping here is what makes the
         // second "лошадка" impossible to hear.
-        guard !stopsRecording else {
+        guard !listensThroughRecording else {
             // Forget the audio and the transcript that triggered this, or the
             // word keeps reappearing in every later result and stops the
             // dictation it just started. Clearing `recognizedTextBuffer` above
@@ -923,7 +995,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
                 // fresh session forgets the word.
                 scheduleRestart(after: 1, reason: "wake word consumed")
             }
-            onWakeWordDetected?()
+            onWakeWordDetected?(trigger)
             return
         }
 
@@ -932,7 +1004,7 @@ class WakeWordListeningService: NSObject, ObservableObject {
             await stopListening()
 
             // Trigger callback
-            onWakeWordDetected?()
+            onWakeWordDetected?(trigger)
         }
     }
 
