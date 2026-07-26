@@ -421,10 +421,43 @@ failed transcription, and delivery returns before reading `output` in both.
 on `outputMode == .paste`, so under a `.respond` or `.customCommand` Mode the send word just
 finishes the dictation. The settings copy says so rather than the code guarding it twice.
 
-`removeTrailingWakeWord` grew to match multi-word phrases (last *N* words joined, then the same
-exact-or-Levenshtein test), and `removeWakeWord` now strips the send phrase off the tail
-unconditionally — it always ends dictation, whatever the primary word's own switch says —
-before the existing primary-word tail and head passes.
+`removeWakeWord` strips the send phrase off the tail unconditionally — it always ends
+dictation, whatever the primary word's own switch says — before the existing primary-word
+tail and head passes.
+
+**The recogniser decides how many words it heard, and that broke tail removal.** The first
+version of `removeTrailingWakeWord` read exactly as many trailing words as the configured
+phrase had. That is wrong for a made-up word: `авадакедавра` came back from Parakeet as
+**"Авада Кедавра"**, so a one-word-wide tail was `кедавра` — five edits from the whole word,
+past the Levenshtein-2 threshold — and the closing word rode into the transcript and out to
+Telegram. Proven, not guessed: `transcription.text` is assigned at
+`TranscriptionPipeline.swift:149`, *after* removal at line 115, so the stored text is the
+post-removal text, and the store held the word.
+
+The fix is to stop trusting the width. Several tail widths are tried (`phraseWordCount + 2`
+down to 1) and each candidate is compared with **spaces and punctuation removed**, which makes
+"Авада Кедавра", "авада, кедавра." and "авадакедавра" the same string — and incidentally
+also catches the mirror case, a configured phrase the recogniser ran together. Exact matches
+are tried at every width before any fuzzy one, so widening the search cannot let a near miss
+eat real words while a clean match exists at another width.
+
+Known limitation, deliberately left: the **head** path still matches only the first word, so a
+split *start* word would leave half of it behind. No evidence of it happening — the start word
+is usually spoken before the recording opens and never reaches the transcript at all — and
+widening a head match is riskier than widening a tail one, since it eats the beginning of real
+content.
+
+**`open -a VoiceInk` may launch a completely different build.** Every `xcodebuild` run
+registers its output bundle with LaunchServices, so a plain `make local-stable` install can
+leave three or four registered `VoiceInk.app`s — `.local-build/`, `build/test-dd/` from a test
+run, and a stale `~/Library/Developer/Xcode/DerivedData/` copy. `open -a VoiceInk` then picks
+one by name, and it is not necessarily the one in `/Applications`. A DerivedData copy is the
+worst case: it was built without `LOCAL_BUILD` and *with* the iCloud entitlements, so it dies
+in `PFCloudKitContainerProvider containerWithIdentifier:` on the CoreData CloudKit queue —
+which reads exactly like "my change crashed the app". Check `procPath` in the `.ips` report
+before believing that. To clean up: `lsregister -u <each stray bundle>`, then
+`lsregister -f -R -trusted /Applications/VoiceInk.app`. `open /Applications/VoiceInk.app` is
+not a reliable workaround; LaunchServices can still redirect it.
 
 **The command word: a third word, and it is deliberately not a wake word.** Say the start
 word, then a word of your choosing, and the rest of the dictation is a command: it goes to
