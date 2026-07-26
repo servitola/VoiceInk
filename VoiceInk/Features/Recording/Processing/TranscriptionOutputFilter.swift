@@ -54,13 +54,21 @@ struct TranscriptionOutputFilter {
         }
 
         let wakeWord = UserDefaults.standard.string(forKey: "wakeWord") ?? "лошадка"
+        let sendWakeWord = UserDefaults.standard.wakeWordSend
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // When the word also ends dictation it is spoken twice, so the closing
-        // one is in the recording too and has to come off the tail as well.
-        // Everything below works on this result, not on the original text.
-        let text = UserDefaults.standard.wakeWordStopsRecording
-            ? removeTrailingWakeWord(from: text, wakeWord: wakeWord)
-            : text
+        // Whatever ended the dictation was spoken into it, so it is in the
+        // recording too and has to come off the tail. The send word always ends
+        // one - that is all it does - while the primary word only does when its
+        // own switch is on. Everything below works on this result, not on the
+        // original text.
+        var text = text
+        if !sendWakeWord.isEmpty {
+            text = removeTrailingWakeWord(from: text, wakeWord: sendWakeWord)
+        }
+        if UserDefaults.standard.wakeWordStopsRecording {
+            text = removeTrailingWakeWord(from: text, wakeWord: wakeWord)
+        }
 
         var filteredText = text
         let normalizedText = text.lowercased()
@@ -108,24 +116,36 @@ struct TranscriptionOutputFilter {
 
     /// Drops a wake word spoken at the end to finish dictation.
     ///
-    /// Only the last word is considered, and only when it matches: a sentence
-    /// that genuinely ends in the wake word is indistinguishable from the stop
+    /// Only the tail is considered, and only when it matches: a sentence that
+    /// genuinely ends in the wake word is indistinguishable from the stop
     /// command, and dropping it is the right call either way, because the user
     /// did just stop the recording with it.
+    ///
+    /// A wake word may be a phrase, so the comparison takes as many trailing
+    /// words as the phrase has and matches them as one string - "отправляй
+    /// сообщение" has to come off whole, not one word of it.
     static func removeTrailingWakeWord(from text: String, wakeWord: String) -> String {
+        let phrase = wakeWord
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .map { $0.lowercased() }
         let words = text.split(separator: " ", omittingEmptySubsequences: true)
-        guard let last = words.last else { return text }
+        guard let last = words.last, !phrase.isEmpty, words.count >= phrase.count else { return text }
 
-        let normalizedLast = last.lowercased()
-            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
-        let normalizedWakeWord = wakeWord.lowercased()
-        guard !normalizedLast.isEmpty, !normalizedWakeWord.isEmpty else { return text }
+        let normalizedTail = words.suffix(phrase.count)
+            .map {
+                $0.lowercased().trimmingCharacters(
+                    in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let normalizedWakeWord = phrase.joined(separator: " ")
+        guard !normalizedTail.isEmpty, !normalizedWakeWord.isEmpty else { return text }
 
-        guard normalizedLast == normalizedWakeWord
-            || levenshteinDistance(normalizedLast, normalizedWakeWord) <= 2
+        guard normalizedTail == normalizedWakeWord
+            || levenshteinDistance(normalizedTail, normalizedWakeWord) <= 2
         else { return text }
 
-        let remainder = words.dropLast().joined(separator: " ")
+        let remainder = words.dropLast(phrase.count).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         logger.notice("🎯 Closing wake word '\(wakeWord)' removed from transcription")
