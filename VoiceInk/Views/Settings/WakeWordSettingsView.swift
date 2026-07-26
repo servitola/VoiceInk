@@ -14,6 +14,7 @@ struct WakeWordSettingsView: View {
     @AppStorage("wakeWordStopsRecording") private var wakeWordStopsRecording = true
     @AppStorage("wakeWordSend") private var wakeWordSend = ""
     @AppStorage("wakeWordSendKey") private var wakeWordSendKey = AutoSendKey.enter.rawValue
+    @AppStorage("wakeWordCommandModeId") private var commandModeSelection = ""
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var tempWakeWord: String = ""
@@ -40,6 +41,7 @@ struct WakeWordSettingsView: View {
             if isWakeWordEnabled {
                 wakeWordConfigSection
                 sendWakeWordSection
+                commandWakeWordSection
                 engineSection
                 languageSection
                 microphoneSection
@@ -206,6 +208,81 @@ struct WakeWordSettingsView: View {
                     .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
             )
         }
+    }
+
+    /// A mode whose own trigger words also start a dictation hands-free.
+    ///
+    /// Deliberately a mode picker and not another text field: the spoken words
+    /// are the mode's trigger words, so the word that opens the recording is by
+    /// construction the same one the pipeline later strips out of the transcript
+    /// and uses to select the mode. Two settings could drift apart; one cannot.
+    private var commandWakeWordSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Command Word")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "terminal")
+                        .foregroundColor(.secondary)
+
+                    Picker("Mode", selection: $commandModeSelection) {
+                        Text("Off").tag("")
+
+                        ForEach(commandModeCandidates, id: \.id) { mode in
+                            Text("\(mode.name) — \(mode.triggerWords.joined(separator: ", "))")
+                                .tag(mode.id.uuidString)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 400)
+                    .onChange(of: commandModeSelection) { _, newValue in
+                        voiceInkEngine.configureCommandWakeWordMode(UUID(uuidString: newValue))
+                    }
+
+                    Spacer()
+                }
+
+                Text(commandModeCandidates.isEmpty
+                     ? String(localized: "No mode has trigger words yet. Give a mode a trigger word in Modes, and it can be started by voice from here.")
+                     : String(localized: "Saying one of the chosen mode's trigger words starts a dictation in that mode, without the wake word first — so the text goes wherever that mode sends it instead of into the focused app."))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 28)
+
+                if let example = commandExample {
+                    Text(example)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 28)
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+            )
+        }
+    }
+
+    /// Modes that can be started by voice: enabled, and with something to say.
+    private var commandModeCandidates: [ModeConfig] {
+        ModeManager.shared.configurations.filter { $0.isEnabled && !$0.triggerWords.isEmpty }
+    }
+
+    private var commandExample: String? {
+        guard let mode = commandModeCandidates.first(where: { $0.id.uuidString == commandModeSelection }),
+            let word = mode.triggerWords.first
+        else { return nil }
+
+        if wakeWordSend.isEmpty {
+            return String(format: String(localized: "Example: say \"%1$@, open the inbox\" to dictate straight into %2$@."), word, mode.name)
+        }
+        return String(format: String(localized: "Example: say \"%1$@, open the inbox … %2$@\" to dictate into %3$@ and finish, hands-free."), word, wakeWordSend, mode.name)
     }
 
     private var languageSection: some View {

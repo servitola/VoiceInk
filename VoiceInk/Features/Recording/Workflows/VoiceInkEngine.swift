@@ -144,6 +144,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     /// detector that never fires can be told apart from one that never hears.
     @Published var wakeWordLastRecognizedText = ""
     var wakeWordService: WakeWordListeningService?
+    /// Keeps the command wake word in step with edits to the mode it points at.
+    var modeConfigurationsObserver: NSObjectProtocol?
     /// Set when the send wake word finished the recording, and spent by the very
     /// next pipeline run - it belongs to that one dictation and nothing after it.
     /// Cleared again whenever a recording starts, because the pipeline is not
