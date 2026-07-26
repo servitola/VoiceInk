@@ -29,6 +29,12 @@ enum RecorderPanelStyle: String, CaseIterable, Identifiable {
 protocol RecorderPanelPresenting: AnyObject {
     var isRecorderPanelVisible: Bool { get }
     func dismissRecorderPanel() async
+    /// Start or finish a dictation, optionally forcing a specific mode.
+    ///
+    /// The `.toggleRecorderPanel` notification covers the caller that has no
+    /// mode in mind. A command wake word does: it exists to route the dictation
+    /// somewhere other than the focused app, and the mode is what says where.
+    func toggleRecorderPanel(modeId: UUID?) async
 }
 
 @MainActor

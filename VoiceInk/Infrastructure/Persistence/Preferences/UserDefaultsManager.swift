@@ -12,6 +12,7 @@ extension UserDefaults {
         static let wakeWordStopsRecording = "wakeWordStopsRecording"
         static let wakeWordSend = "wakeWordSend"
         static let wakeWordSendKey = "wakeWordSendKey"
+        static let wakeWordCommandModeId = "wakeWordCommandModeId"
         static let removeWakeWordFromTranscription = "removeWakeWordFromTranscription"
         static let wakeWordEngine = "wakeWordEngine"
         static let wakeWordModelName = "wakeWordModelName"
@@ -134,6 +135,20 @@ extension UserDefaults {
             return key
         }
         set { setValue(newValue.rawValue, forKey: Keys.wakeWordSendKey) }
+    }
+
+    /// The mode a command wake word starts a dictation in, if any.
+    ///
+    /// Only the mode is stored, never the words: the words *are* that mode's
+    /// trigger words. Keeping one copy is what guarantees the word that opened
+    /// the recording is also the one stripped out of the transcript afterwards.
+    /// Nil = no command wake word.
+    var wakeWordCommandModeId: UUID? {
+        get {
+            guard let raw = string(forKey: Keys.wakeWordCommandModeId) else { return nil }
+            return UUID(uuidString: raw)
+        }
+        set { setValue(newValue?.uuidString, forKey: Keys.wakeWordCommandModeId) }
     }
 
     /// Keep the wake word out of the dictated text.
