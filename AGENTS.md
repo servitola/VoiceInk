@@ -426,6 +426,40 @@ exact-or-Levenshtein test), and `removeWakeWord` now strips the send phrase off 
 unconditionally — it always ends dictation, whatever the primary word's own switch says —
 before the existing primary-word tail and head passes.
 
+**The command word: a third word, and it starts somewhere else.** `wakeWordCommandModeId`
+(unset by default) names a Mode. Saying one of *that Mode's own trigger words* while idle
+starts a dictation in it, so the text goes wherever the Mode sends it — a `.customCommand`
+Mode shells out, and the dictation never touches the focused app. Hands-free: no primary
+wake word in front of it. Three things about it are not obvious.
+
+*Only the Mode is stored, never the words.* The spoken words are read back out of
+`ModeConfig.triggerWords` on launch and again on every `.modeConfigurationsDidChange`. That
+is not laziness — it is what guarantees the word that opened the recording is the same one
+`ModeTriggerWordDetectionService` later strips out of the transcript and uses to select the
+Mode. Two settings could drift apart and leave the word wedged in the middle of the command;
+one cannot. It also means a Mode that was deleted, disabled or stripped of its trigger words
+simply disarms the wake word, which is right: an armed word pointing at a Mode that no longer
+exists would paste the command into whatever has focus.
+
+*It only ever starts.* `selectTrigger` checks command words only in the idle branch, ahead of
+the primary word (it names one specific destination; the primary word means "dictate
+somewhere, work out where later"). Mid-dictation the word is just part of what is being said,
+and firing there would cut the sentence that mentions it in half.
+
+*It does not go through the notification.* `.toggleRecorderPanel` carries no Mode, so the
+handler resolves one from the frontmost app — exactly what a command dictation must not do.
+`handleWakeWordDetected` calls `recorderUIManager.toggleRecorderPanel(modeId:)` directly
+instead, the same entry point a per-Mode hotkey uses, which is why `RecorderPanelPresenting`
+gained that method. No new one-shot override state was needed: `beginApplyingConfiguration`
+re-resolves the active Mode on *every* recording start, so the forced Mode cannot leak into
+the next dictation.
+
+Nothing is stripped from the transcript for this word, deliberately. `removeWakeWord` runs
+*before* trigger-word Mode selection in the pipeline, so stripping it there would hide it
+from the detector that needs it. If the recording caught the word, the trigger-word detector
+removes it and re-selects the same Mode; if it did not, the Mode is already right. Both paths
+land in the same place.
+
 **Restart safety.** Every start/stop bumps a `generation` token that all async continuations
 check before touching shared state, and `stopListening()` tears down unconditionally. The old
 `guard isListening` could skip teardown after a lost race and leave the engine holding the mic.
