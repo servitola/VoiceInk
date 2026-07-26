@@ -205,6 +205,59 @@ struct TrailingWakeWordRemovalTests {
             TranscriptionOutputFilter.removeTrailingWakeWord(
                 from: "сообщение", wakeWord: "отправляй сообщение") == "сообщение")
     }
+
+    // MARK: - However the recogniser chose to break the word up
+
+    /// The one that shipped broken. A single configured word came back as two
+    /// ("авадакедавра" → "Авада Кедавра"), the tail was read one word wide, and
+    /// "кедавра" is five edits from the whole word — so the closing word rode
+    /// into the text and out to Telegram.
+    @Test func removesAClosingWordTheRecogniserSplitInTwo() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "и для людей тоже было бы хорошо Авада Кедавра.",
+                wakeWord: "авадакедавра") == "и для людей тоже было бы хорошо.")
+    }
+
+    @Test func removesAClosingWordSplitWithPunctuationBetween() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это авада, кедавра", wakeWord: "авадакедавра")
+                == "сделай вот это")
+    }
+
+    @Test func removesASplitClosingWordThatIsAlsoMisheard() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это авада кедабра", wakeWord: "авадакедавра")
+                == "сделай вот это")
+    }
+
+    /// The mirror case: a configured phrase that the recogniser ran together.
+    @Test func removesAClosingPhraseTheRecogniserMerged() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это отправляйсообщение", wakeWord: "отправляй сообщение")
+                == "сделай вот это")
+    }
+
+    /// The wider search must not start eating real words. Three trailing words
+    /// that merely end in something word-shaped stay put.
+    @Test func theWiderSearchDoesNotSwallowRealWords() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "и для людей тоже было бы хорошо", wakeWord: "авадакедавра")
+                == "и для людей тоже было бы хорошо")
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "лошадка бежит по полю", wakeWord: "лошадка") == "лошадка бежит по полю")
+    }
+
+    /// An exact match at one width beats a near miss at a wider one, so the
+    /// search cannot take an extra word just because it was tried first.
+    @Test func anExactMatchWinsOverAWiderNearMiss() {
+        #expect(strip("привет мир лошадка") == "привет мир")
+    }
 }
 
 /// End to end: whichever word ended the dictation was spoken into it, so neither
@@ -347,3 +400,4 @@ struct WakeWordMicrophonePersistenceTests {
         defaults.removePersistentDomain(forName: "WakeWordMicrophonePersistenceTests")
     }
 }
+
