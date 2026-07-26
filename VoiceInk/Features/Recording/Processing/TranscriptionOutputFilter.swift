@@ -121,31 +121,38 @@ struct TranscriptionOutputFilter {
     /// command, and dropping it is the right call either way, because the user
     /// did just stop the recording with it.
     ///
-    /// A wake word may be a phrase, so the comparison takes as many trailing
-    /// words as the phrase has and matches them as one string - "отправляй
-    /// сообщение" has to come off whole, not one word of it.
+    /// A wake word may be a phrase, and - the part that bit - the recogniser
+    /// decides for itself how many words it heard. A single configured word can
+    /// come back split ("авадакедавра" → "Авада Кедавра"), and a phrase can come
+    /// back merged. So the tail is not read at a fixed width: several widths are
+    /// tried and compared with spaces and punctuation removed, which makes the
+    /// split and merged renderings identical strings.
+    ///
+    /// Exact matches are tried at every width before any fuzzy one, so the wider
+    /// search cannot let a near miss eat real words when a clean match exists.
     static func removeTrailingWakeWord(from text: String, wakeWord: String) -> String {
-        let phrase = wakeWord
-            .split(separator: " ", omittingEmptySubsequences: true)
-            .map { $0.lowercased() }
+        let target = normalizedForMatching(wakeWord)
         let words = text.split(separator: " ", omittingEmptySubsequences: true)
-        guard let last = words.last, !phrase.isEmpty, words.count >= phrase.count else { return text }
+        guard let last = words.last, !target.isEmpty else { return text }
 
-        let normalizedTail = words.suffix(phrase.count)
-            .map {
-                $0.lowercased().trimmingCharacters(
-                    in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        let phraseWordCount = wakeWord.split(separator: " ", omittingEmptySubsequences: true).count
+        // Two words of slack: enough for the recogniser to split a word in half
+        // or wedge in a stray particle, not enough to swallow a clause.
+        let widestTail = min(words.count, max(phraseWordCount, 1) + 2)
+        guard widestTail >= 1 else { return text }
+
+        let widths = Array(stride(from: widestTail, through: 1, by: -1))
+        let matchedWidth =
+            widths.first { normalizedForMatching(words.suffix($0).joined(separator: " ")) == target }
+            ?? widths.first { width in
+                let candidate = normalizedForMatching(words.suffix(width).joined(separator: " "))
+                guard !candidate.isEmpty else { return false }
+                return levenshteinDistance(candidate, target) <= 2
             }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        let normalizedWakeWord = phrase.joined(separator: " ")
-        guard !normalizedTail.isEmpty, !normalizedWakeWord.isEmpty else { return text }
 
-        guard normalizedTail == normalizedWakeWord
-            || levenshteinDistance(normalizedTail, normalizedWakeWord) <= 2
-        else { return text }
+        guard let matchedWidth else { return text }
 
-        let remainder = words.dropLast(phrase.count).joined(separator: " ")
+        let remainder = words.dropLast(matchedWidth).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         logger.notice("🎯 Closing wake word '\(wakeWord)' removed from transcription")
@@ -162,6 +169,20 @@ struct TranscriptionOutputFilter {
             return remainder + String(tail)
         }
         return remainder
+    }
+
+    /// Lowercased, with whitespace and punctuation dropped entirely.
+    ///
+    /// Dropping the spaces is the point: it makes "Авада Кедавра", "авадакедавра"
+    /// and "авада, кедавра." one and the same string, so how the recogniser chose
+    /// to break up a made-up word stops mattering.
+    private static func normalizedForMatching(_ text: String) -> String {
+        text.lowercased().unicodeScalars
+            .filter {
+                !CharacterSet.whitespacesAndNewlines.contains($0)
+                    && !CharacterSet.punctuationCharacters.contains($0)
+            }
+            .reduce(into: "") { $0.unicodeScalars.append($1) }
     }
 
     /// Calculate Levenshtein distance between two strings for fuzzy matching
