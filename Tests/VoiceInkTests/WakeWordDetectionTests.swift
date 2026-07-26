@@ -33,6 +33,56 @@ struct WakeWordDetectionTests {
         #expect(!WakeWordListeningService.detectWakeWord("", in: "любой текст"))
     }
 
+    // MARK: - Choosing between the two words
+
+    private func trigger(
+        in text: String,
+        send: String = "отправляй",
+        isRecording: Bool,
+        stopsRecording: Bool = true
+    ) -> WakeWordTrigger? {
+        WakeWordListeningService.selectTrigger(
+            primary: "лошадка",
+            send: send,
+            in: text,
+            isRecording: isRecording,
+            stopsRecording: stopsRecording
+        )
+    }
+
+    @Test func primaryWordStartsDictationWhenIdle() {
+        #expect(trigger(in: "лошадка напиши письмо", isRecording: false) == .primary)
+    }
+
+    @Test func sendWordDoesNothingWhenIdle() {
+        // It finishes dictation. There is nothing to finish.
+        #expect(trigger(in: "отправляй уже", isRecording: false) == nil)
+    }
+
+    @Test func sendWordFinishesARunningDictation() {
+        #expect(trigger(in: "привет как дела отправляй", isRecording: true) == .send)
+    }
+
+    @Test func sendWordWinsWhenBothWordsAreHeard() {
+        #expect(trigger(in: "лошадка привет отправляй", isRecording: true) == .send)
+    }
+
+    /// A configured send word keeps the detector listening through the whole
+    /// recording, which is the first time the primary word is audible mid
+    /// dictation at all. It must not quietly gain a power the user turned off.
+    @Test func primaryWordCannotFinishWhenItsOwnSwitchIsOff() {
+        #expect(trigger(in: "лошадка", isRecording: true, stopsRecording: false) == nil)
+        #expect(trigger(in: "отправляй", isRecording: true, stopsRecording: false) == .send)
+    }
+
+    @Test func primaryWordFinishesWhenItsSwitchIsOn() {
+        #expect(trigger(in: "сделал лошадка", send: "", isRecording: true) == .primary)
+    }
+
+    @Test func noSendWordConfiguredMeansNoSendTrigger() {
+        #expect(trigger(in: "отправляй уже", send: "", isRecording: true) == nil)
+    }
+
     // MARK: - Levenshtein
 
     @Test func distanceOfIdenticalStringsIsZero() {
@@ -52,6 +102,10 @@ struct WakeWordDetectionTests {
 
 /// The closing wake word, spoken to finish dictation, lands in the recording and
 /// has to come off the tail.
+///
+/// Serialised: the cases below reach into `UserDefaults.standard`, which every
+/// other test in this file shares.
+@Suite(.serialized)
 struct TrailingWakeWordRemovalTests {
 
     private func strip(_ text: String) -> String {
@@ -104,6 +158,118 @@ struct TrailingWakeWordRemovalTests {
 
         defaults.removeWakeWordFromTranscription = false
         #expect(!defaults.removeWakeWordFromTranscription)
+    }
+
+    // MARK: - Multi-word phrases
+
+    @Test func removesAWholeClosingPhrase() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это отправляй сообщение", wakeWord: "отправляй сообщение")
+                == "сделай вот это")
+    }
+
+    @Test func removesAMisrecognizedClosingPhrase() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это отправляй сообщения", wakeWord: "отправляй сообщение")
+                == "сделай вот это")
+    }
+
+    @Test func leavesAPhraseThatOnlyPartlyMatches() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сделай вот это сообщение", wakeWord: "отправляй сообщение")
+                == "сделай вот это сообщение")
+    }
+
+    @Test func leavesTextShorterThanThePhrase() {
+        #expect(
+            TranscriptionOutputFilter.removeTrailingWakeWord(
+                from: "сообщение", wakeWord: "отправляй сообщение") == "сообщение")
+    }
+}
+
+/// End to end: whichever word ended the dictation was spoken into it, so neither
+/// may reach the text that gets pasted.
+@Suite(.serialized)
+struct WakeWordRemovalTests {
+
+    /// Runs `body` with the wake word settings pinned, then puts them back.
+    private func withSettings(
+        send: String,
+        stopsRecording: Bool,
+        _ body: () -> Void
+    ) {
+        let defaults = UserDefaults.standard
+        let originalSend = defaults.object(forKey: "wakeWordSend")
+        let originalStops = defaults.object(forKey: "wakeWordStopsRecording")
+        let originalRemove = defaults.object(forKey: "removeWakeWordFromTranscription")
+        let originalWord = defaults.object(forKey: "wakeWord")
+        defer {
+            defaults.setValue(originalSend, forKey: "wakeWordSend")
+            defaults.setValue(originalStops, forKey: "wakeWordStopsRecording")
+            defaults.setValue(originalRemove, forKey: "removeWakeWordFromTranscription")
+            defaults.setValue(originalWord, forKey: "wakeWord")
+        }
+
+        defaults.setValue("лошадка", forKey: "wakeWord")
+        defaults.wakeWordSend = send
+        defaults.wakeWordStopsRecording = stopsRecording
+        defaults.removeWakeWordFromTranscription = true
+        body()
+    }
+
+    @Test func stripsTheOpeningWordAndTheClosingSendWord() {
+        withSettings(send: "отправляй", stopsRecording: true) {
+            #expect(
+                TranscriptionOutputFilter.removeWakeWord(from: "лошадка привет мир отправляй")
+                    == "Привет мир")
+        }
+    }
+
+    /// The send word ends dictation on its own, so it comes off the tail whether
+    /// or not the plain wake word is allowed to end one.
+    @Test func stripsTheSendWordEvenWhenSayingItAgainIsOff() {
+        withSettings(send: "отправляй", stopsRecording: false) {
+            #expect(
+                TranscriptionOutputFilter.removeWakeWord(from: "лошадка привет мир отправляй")
+                    == "Привет мир")
+        }
+    }
+
+    @Test func leavesTextAloneWhenNoSendWordIsConfigured() {
+        withSettings(send: "", stopsRecording: false) {
+            #expect(
+                TranscriptionOutputFilter.removeWakeWord(from: "лошадка привет мир отправляй")
+                    == "Привет мир отправляй")
+        }
+    }
+
+    /// Starting and immediately sending records nothing worth pasting.
+    @Test func aStartAndAnImmediateSendLeaveNothing() {
+        withSettings(send: "отправляй", stopsRecording: true) {
+            #expect(TranscriptionOutputFilter.removeWakeWord(from: "лошадка отправляй") == "")
+        }
+    }
+}
+
+struct AutoSendOverrideTests {
+
+    @Test func overridingReplacesOnlyTheKey() {
+        let original = OutputRuntimeConfiguration(
+            mode: nil,
+            outputMode: .paste,
+            autoSendKey: .none,
+            customCommand: nil
+        )
+
+        let overridden = original.overridingAutoSendKey(.enter)
+
+        #expect(overridden.autoSendKey == .enter)
+        #expect(overridden.outputMode == .paste)
+        #expect(overridden.mode == nil)
+        #expect(overridden.customCommand == nil)
     }
 }
 

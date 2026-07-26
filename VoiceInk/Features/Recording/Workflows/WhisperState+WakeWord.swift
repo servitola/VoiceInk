@@ -4,26 +4,38 @@ import os
 // MARK: - Wake Word Detection Extension
 extension VoiceInkEngine {
 
+    /// True when *some* spoken word can end a running dictation - either the
+    /// primary word saying it again, or the separate send word. Both cases mean
+    /// the detector has to hold the microphone for the length of the recording
+    /// instead of handing it to the recorder.
+    static var voiceCanFinishDictation: Bool {
+        UserDefaults.standard.wakeWordStopsRecording
+            || !UserDefaults.standard.wakeWordSend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     // MARK: - Wake Word Management
 
     /// Initialize wake word service and start listening if enabled
     func initializeWakeWordService() {
         let service = WakeWordListeningService()
-        service.setWakeWordDetectedCallback { [weak self] in
+        service.setWakeWordDetectedCallback { [weak self] trigger in
             Task { @MainActor [weak self] in
-                await self?.handleWakeWordDetected()
+                await self?.handleWakeWordDetected(trigger: trigger)
             }
         }
         service.canStartListening = { [weak self] in
             guard let self else { return false }
-            // While the wake word also ends dictation, listening through an
+            // While a spoken word also ends dictation, listening through an
             // active recording is the whole point. Transcription and enhancement
             // still take the detector down: there is nothing to stop by then,
             // and the model would compete with the one doing the real work.
-            if UserDefaults.standard.wakeWordStopsRecording, self.recordingState == .recording {
+            if Self.voiceCanFinishDictation, self.recordingState == .recording {
                 return true
             }
             return self.recordingState == .idle
+        }
+        service.isRecordingActive = { [weak self] in
+            self?.recordingState == .recording
         }
         // The local engine reuses the app's shared FluidAudio service, so the
         // Parakeet model is loaded once for both dictation and wake word.
@@ -108,7 +120,25 @@ extension VoiceInkEngine {
 
     /// Handle wake word detection - start recording, or finish the one running.
     @MainActor
-    func handleWakeWordDetected() async {
+    func handleWakeWordDetected(trigger: WakeWordTrigger) async {
+        if trigger == .send {
+            // The send word only ever finishes. The detector already refuses to
+            // report it while idle; this is the second lock on the same door,
+            // because arming the override without a recording to spend it on is
+            // exactly how a stray Return ends up in the next dictation.
+            guard recordingState == .recording else {
+                logger.notice("🎯 Send wake word ignored - nothing is recording")
+                return
+            }
+
+            pendingAutoSendOverride = UserDefaults.standard.wakeWordSendKey
+            logger.notice(
+                "🎯 Send wake word detected - finishing recording and pressing \(UserDefaults.standard.wakeWordSendKey.rawValue, privacy: .public)"
+            )
+            NotificationCenter.default.post(name: .toggleRecorderPanel, object: nil)
+            return
+        }
+
         // The same notification does both: `toggleRecorderPanel` starts a session
         // when the engine is idle and finishes it - transcribe, then paste - when
         // one is running, which is exactly what pressing the shortcut twice does.
@@ -117,8 +147,8 @@ extension VoiceInkEngine {
         } else {
             logger.notice("🎯 Wake word detected - starting recording")
             // Listening resumes once the pipeline returns to idle, unless the
-            // detector kept the microphone to hear the closing word.
-            if !UserDefaults.standard.wakeWordStopsRecording {
+            // detector kept the microphone to hear a closing word.
+            if !Self.voiceCanFinishDictation {
                 isWakeWordListening = false
             }
         }
@@ -152,6 +182,17 @@ extension VoiceInkEngine {
 
         service.configureWakeWord(word, language: language)
         logger.notice("Wake word configured: '\(word)', language: \(language)")
+    }
+
+    /// Configure the second word, the one that finishes dictation and sends it.
+    /// Pass an empty string to turn it off.
+    func configureSendWakeWord(_ word: String) {
+        guard let service = wakeWordService else {
+            logger.error("Wake word service not initialized")
+            return
+        }
+
+        service.configureSendWakeWord(word)
     }
 
     /// Configure which microphone the wake word detector listens on.
