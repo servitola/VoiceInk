@@ -10,6 +10,8 @@ extension UserDefaults {
         static let wakeWordMicrophoneModelUID = "wakeWordMicrophoneModelUID"
         static let wakeWordMicrophoneName = "wakeWordMicrophoneName"
         static let wakeWordStopsRecording = "wakeWordStopsRecording"
+        static let wakeWordSend = "wakeWordSend"
+        static let wakeWordSendKey = "wakeWordSendKey"
         static let removeWakeWordFromTranscription = "removeWakeWordFromTranscription"
         static let wakeWordEngine = "wakeWordEngine"
         static let wakeWordModelName = "wakeWordModelName"
@@ -108,6 +110,30 @@ extension UserDefaults {
     var wakeWordStopsRecording: Bool {
         get { object(forKey: Keys.wakeWordStopsRecording) as? Bool ?? true }
         set { setValue(newValue, forKey: Keys.wakeWordStopsRecording) }
+    }
+
+    /// A second wake word that finishes dictation *and* presses the send key,
+    /// so a message can be dictated and sent without touching the keyboard.
+    /// Empty means the feature is off, which is the default.
+    var wakeWordSend: String {
+        get { string(forKey: Keys.wakeWordSend) ?? "" }
+        set { setValue(newValue, forKey: Keys.wakeWordSend) }
+    }
+
+    /// Which key the send wake word presses after the paste.
+    ///
+    /// Read through `object(forKey:)` for the same reason as
+    /// `removeWakeWordFromTranscription` below: the key is only written once the
+    /// settings picker is touched, and an unwritten key must still mean Return -
+    /// pressing nothing is not what "finish and send" says on the tin.
+    var wakeWordSendKey: AutoSendKey {
+        get {
+            guard let raw = object(forKey: Keys.wakeWordSendKey) as? String,
+                let key = AutoSendKey(rawValue: raw)
+            else { return .enter }
+            return key
+        }
+        set { setValue(newValue.rawValue, forKey: Keys.wakeWordSendKey) }
     }
 
     /// Keep the wake word out of the dictated text.

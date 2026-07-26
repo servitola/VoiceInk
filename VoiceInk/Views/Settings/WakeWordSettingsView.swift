@@ -12,9 +12,12 @@ struct WakeWordSettingsView: View {
     @AppStorage("wakeWordModelName") private var wakeWordModelName = ""
     @AppStorage("removeWakeWordFromTranscription") private var removeWakeWordFromTranscription = true
     @AppStorage("wakeWordStopsRecording") private var wakeWordStopsRecording = true
+    @AppStorage("wakeWordSend") private var wakeWordSend = ""
+    @AppStorage("wakeWordSendKey") private var wakeWordSendKey = AutoSendKey.enter.rawValue
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var tempWakeWord: String = ""
+    @State private var tempSendWakeWord: String = ""
 
     var body: some View {
         ScrollView {
@@ -26,6 +29,7 @@ struct WakeWordSettingsView: View {
         .background(Color(NSColor.controlBackgroundColor))
         .onAppear {
             tempWakeWord = wakeWord
+            tempSendWakeWord = wakeWordSend
         }
     }
 
@@ -35,6 +39,7 @@ struct WakeWordSettingsView: View {
 
             if isWakeWordEnabled {
                 wakeWordConfigSection
+                sendWakeWordSection
                 engineSection
                 languageSection
                 microphoneSection
@@ -114,6 +119,85 @@ struct WakeWordSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.leading, 28)
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+            )
+        }
+    }
+
+    private var sendWakeWordSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Finish and Send")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "paperplane")
+                        .foregroundColor(.secondary)
+
+                    TextField("Optional second word...", text: $tempSendWakeWord)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            updateSendWakeWord()
+                        }
+
+                    if tempSendWakeWord.trimmingCharacters(in: .whitespacesAndNewlines) != wakeWordSend {
+                        Button("Save") {
+                            updateSendWakeWord()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                if !wakeWordSend.isEmpty {
+                    HStack {
+                        Image(systemName: "return")
+                            .foregroundColor(.secondary)
+
+                        Picker("Key to press", selection: $wakeWordSendKey) {
+                            ForEach(AutoSendKey.allCases.filter { $0.isEnabled }, id: \.rawValue) { key in
+                                Text(key.displayName).tag(key.rawValue)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 300)
+                    }
+                }
+
+                Text(wakeWordSend.isEmpty
+                     ? String(localized: "A second word that ends dictation and presses Return, so a message can be dictated and sent without touching the keyboard. Leave empty to turn it off.")
+                     : String(format: String(localized: "Say \"%1$@, write an email … %2$@\" to dictate and send in one go."), wakeWord, wakeWordSend))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 28)
+
+                if !wakeWordSend.isEmpty {
+                    // The detector has to hold the microphone for the whole
+                    // recording to hear this word, which is also the first time
+                    // the plain wake word becomes audible mid-dictation.
+                    Text("While this is set, wake word detection keeps the microphone through the whole recording. It only applies to modes whose output is Paste.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 28)
+                }
+
+                if isSendWakeWordTooSimilar {
+                    Label(
+                        String(format: String(localized: "\"%1$@\" is too close to \"%2$@\" - the detector matches near misses and cannot tell these two apart. Pick a more distinct word."), wakeWordSend, wakeWord),
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 28)
+                }
             }
             .padding()
             .background(
@@ -494,6 +578,26 @@ struct WakeWordSettingsView: View {
         wakeWord = trimmed
         tempWakeWord = trimmed
         voiceInkEngine.configureWakeWord(word: trimmed, language: wakeWordLanguage)
+    }
+
+    /// Unlike the wake word, an empty value is meaningful here - it turns the
+    /// send word off - so this saves it instead of refusing.
+    private func updateSendWakeWord() {
+        let trimmed = tempSendWakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        wakeWordSend = trimmed
+        tempSendWakeWord = trimmed
+        voiceInkEngine.configureSendWakeWord(trimmed)
+    }
+
+    /// The detector accepts near misses, so two words within two edits of each
+    /// other are one word as far as it is concerned.
+    private var isSendWakeWordTooSimilar: Bool {
+        guard !wakeWordSend.isEmpty else { return false }
+        return WakeWordListeningService.levenshteinDistance(
+            wakeWordSend.lowercased(),
+            wakeWord.lowercased()
+        ) <= 2
     }
 }
 
