@@ -144,6 +144,12 @@ class VoiceInkEngine: NSObject, ObservableObject {
     /// detector that never fires can be told apart from one that never hears.
     @Published var wakeWordLastRecognizedText = ""
     var wakeWordService: WakeWordListeningService?
+    /// Set when the send wake word finished the recording, and spent by the very
+    /// next pipeline run - it belongs to that one dictation and nothing after it.
+    /// Cleared again whenever a recording starts, because the pipeline is not
+    /// guaranteed to run at all: a failed transcription or a cancellation would
+    /// otherwise leave it armed to press Return into the next dictation.
+    var pendingAutoSendOverride: AutoSendKey?
 
     let recorder = Recorder()
     var recordedFile: URL? = nil
@@ -262,10 +268,15 @@ class VoiceInkEngine: NSObject, ObservableObject {
                 await cleanupResources()
             }
         } else {
-            // Hand the microphone over for manual recording - unless the wake
+            // A previous dictation may have armed an auto-send that never got
+            // spent - a failed transcription or a cancellation skips the pipeline
+            // entirely. Starting fresh is the one place that catches all of them.
+            pendingAutoSendOverride = nil
+
+            // Hand the microphone over for manual recording - unless a wake
             // word is also what ends dictation, in which case the detector has
             // to keep listening through the recording to hear it.
-            if isWakeWordListening, !UserDefaults.standard.wakeWordStopsRecording {
+            if isWakeWordListening, !Self.voiceCanFinishDictation {
                 await stopWakeWordListening()
             }
 
@@ -619,8 +630,16 @@ class VoiceInkEngine: NSObject, ObservableObject {
                     contextStore?.snapshot
                 }
             },
-            outputConfiguration: {
-                ModeRuntimeResolver.outputConfiguration()
+            outputConfiguration: { [weak self] in
+                let configuration = ModeRuntimeResolver.outputConfiguration()
+                guard let self, let override = self.pendingAutoSendOverride else {
+                    return configuration
+                }
+                // Spend it here: the pipeline asks twice, but only this first
+                // answer reaches delivery, and the override is good for exactly
+                // the dictation the send word ended.
+                self.pendingAutoSendOverride = nil
+                return configuration.overridingAutoSendKey(override)
             },
             onStateChange: { [weak self] state in
                 guard let self, self.activePipelineTranscriptionID == transcriptionID else { return }
