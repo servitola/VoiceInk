@@ -137,12 +137,12 @@ extension UserDefaults {
         set { setValue(newValue.rawValue, forKey: Keys.wakeWordSendKey) }
     }
 
-    /// The mode a command wake word starts a dictation in, if any.
+    /// The mode the command word routes a dictation to, if any.
     ///
-    /// Only the mode is stored, never the words: the words *are* that mode's
-    /// trigger words. Keeping one copy is what guarantees the word that opened
-    /// the recording is also the one stripped out of the transcript afterwards.
-    /// Nil = no command wake word.
+    /// Only the mode is stored, never the word: the word *is* that mode's
+    /// trigger word. Keeping one copy is what guarantees the word the settings
+    /// screen shows is the same one `ModeTriggerWordDetectionService` matches
+    /// and strips out of the transcript. Nil = no command word.
     var wakeWordCommandModeId: UUID? {
         get {
             guard let raw = string(forKey: Keys.wakeWordCommandModeId) else { return nil }
