@@ -10,6 +10,11 @@ The build auto-detects the host CPU, so the **same command works on both**:
 make local-stable   # or: make local / make build
 ```
 
+Use `make local-stable`. `make local` signs ad-hoc, which makes macOS revoke the
+app's permissions on every reinstall; it now refuses to overwrite a stably-signed
+`/Applications/VoiceInk.app` unless you pass `FORCE_ADHOC=1`. `make check-tcc`
+answers "does macOS still recognise the installed build?" — see COMMON-ISSUES.md §12b.
+
 - **Apple Silicon (arm64):** builds the full app, including the Parakeet
   (FluidAudio) engine.
 - **Intel (x86_64):** FluidAudio/Parakeet depends on the Apple Neural Engine and
@@ -33,6 +38,13 @@ Silicon Mac).
 - CMake (via Homebrew: `brew install cmake`)
 
 ## Quick Build & Install
+
+> These are the raw steps, kept for reference and for a first build from nothing.
+> Step 9 signs ad-hoc and step 10 drops the result into `/Applications`, which
+> strips every macOS permission the installed app had — the hotkey stops working
+> and nothing says why. For a machine that already runs the fork, use
+> `make local-stable` instead, and read COMMON-ISSUES.md §12b before hand-signing
+> anything.
 
 ```bash
 cd ~/projects/voiceink
@@ -593,6 +605,37 @@ substitution went unnoticed for a day — the fork could not be rebuilt, so nobo
 The lesson generalises: **an upstream rebase can leave fork-only files uncompilable, and
 nothing tells you until you next build.** Worth a pre-push hook or CI that builds and runs
 `VoiceInkTests` before anything reaches `origin/main`.
+
+**Later the same day — the hotkey went dead and the signing certificate was why.**
+`Ctrl+Shift+Z` stopped recording while the app looked entirely healthy: process alive, shim
+on `:8178` answering, `voiceink transcribe` returning in 0.3 s, `Authority=VoiceInk Local
+Signing`, no `SUFeedURL`. What gave it away was `tccd`:
+
+```
+Failed to match existing code requirement for subject
+com.prakashjoshipax.VoiceInk and service kTCCServiceListenEvent
+identifier "com.prakashjoshipax.VoiceInk" and certificate leaf = H"909602ca…"
+```
+
+macOS had pinned the permissions to a certificate leaf that no longer existed. The keychain
+held exactly one `VoiceInk Local Signing` cert, `AC74F829…`, with `notBefore` 12:13:28 UTC —
+minted during that afternoon's rebuild. Grants stayed with the dead `909602ca…`, so Input
+Monitoring, Microphone, Accessibility and Screen Recording were all silently refused. The
+last real microphone recording on disk was 14:07; the first refusal, 14:08:36. Everything
+after that in `Recordings/` was a `retranscribed_*` file — old audio replayed through the
+History view, which needs no permissions at all.
+
+Fixed by `tccutil reset` of the four services, re-granting, and **restarting the app** — the
+grant does not reach a process that is already running, which is why it still looked broken
+right after the switches were flipped. Confirmed working from the log: `CoreAudioRecorder`
+opened the mic, `StreamingTranscriptionService` connected to Parakeet V3, and the pipeline
+returned `Test test.` from a live mic recording.
+
+The corresponding cure: `make local` now refuses to overwrite a stably-signed install
+(override with `FORCE_ADHOC=1`), `create-local-signing-cert.sh` checks for a usable
+*identity* rather than a bare certificate, clears an orphan itself, and shouts when it mints
+a new certificate, and `make check-tcc` reports the mismatch straight from the `tccd` log.
+COMMON-ISSUES.md §12b carries the full account.
 
 Backlog and topic entry point now live at `~/projects/serho_topics/voiceink/`
 (`BACKLOG.md`, `AGENTS.md`, symlink `repo`).
