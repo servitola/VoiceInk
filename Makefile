@@ -12,7 +12,7 @@ RUN_APP_NAME ?= VoiceInk
 DEBUG_APP_NAME := VoiceInk Dev
 INSTALL_PATH := /Applications/VoiceInk.app
 
-.PHONY: all clean whisper setup build local local-stable check healthcheck check-env help dev run cli install-cli fix-derived-app release release-setup
+.PHONY: all clean whisper setup build local local-stable check check-tcc healthcheck check-env help dev run cli install-cli fix-derived-app release release-setup
 
 # Default target
 all: check build
@@ -87,6 +87,18 @@ fix-derived-app:
 # LOCAL_SIGN_IDENTITY may be overridden (e.g. by `local-stable`) to use a real
 # code-signing identity so macOS TCC permissions survive future rebuilds.
 local: check setup
+	@if [ "$(LOCAL_SIGN_IDENTITY)" = "-" ] && [ -d "$(INSTALL_PATH)" ] && [ -z "$$FORCE_ADHOC" ]; then \
+		INSTALLED_AUTH=$$(codesign -dvvv "$(INSTALL_PATH)" 2>&1 | awk -F= '/^Authority=/ {print $$2; exit}'); \
+		if [ -n "$$INSTALLED_AUTH" ]; then \
+			echo "Refusing to overwrite a stably-signed $(INSTALL_PATH) (Authority=$$INSTALLED_AUTH)"; \
+			echo "with an ad-hoc build: macOS would drop every TCC grant and the hotkey would"; \
+			echo "silently stop working. See COMMON-ISSUES.md §12b."; \
+			echo ""; \
+			echo "  make local-stable            keep permissions (what you almost certainly want)"; \
+			echo "  make local FORCE_ADHOC=1     proceed anyway and re-grant permissions by hand"; \
+			exit 1; \
+		fi; \
+	fi
 	@if [ "$(LOCAL_SIGN_IDENTITY)" = "-" ]; then \
 		echo "Building VoiceInk for local use (ad-hoc signing — TCC permissions reset on each rebuild)..."; \
 	else \
@@ -150,9 +162,9 @@ LOCAL_SIGN_CERT_NAME := VoiceInk Local Signing
 local-stable: check
 	@if [ -z "$$LOCAL_SIGN_IDENTITY" ] || [ "$$LOCAL_SIGN_IDENTITY" = "-" ]; then \
 		./scripts/create-local-signing-cert.sh; \
-		IDENTITY=$$(security find-certificate -c "$(LOCAL_SIGN_CERT_NAME)" -Z 2>/dev/null | awk '/SHA-1 hash:/ {print $$3; exit}'); \
+		IDENTITY=$$(security find-identity -p codesigning 2>/dev/null | awk -v n="$(LOCAL_SIGN_CERT_NAME)" 'index($$0, n) {print $$2; exit}'); \
 		if [ -z "$$IDENTITY" ]; then \
-			echo "Failed to locate '$(LOCAL_SIGN_CERT_NAME)' in keychain after creation."; \
+			echo "Failed to locate a usable '$(LOCAL_SIGN_CERT_NAME)' identity in keychain after creation."; \
 			exit 1; \
 		fi; \
 	else \
@@ -160,6 +172,36 @@ local-stable: check
 	fi; \
 	echo "Using signing identity: $$IDENTITY"; \
 	$(MAKE) --no-print-directory local LOCAL_SIGN_IDENTITY="$$IDENTITY"
+
+# Answer "is the hotkey dead because macOS stopped recognising this build?"
+# tccd logs a requirement mismatch instead of prompting, so nothing surfaces
+# in the UI and the app looks perfectly healthy.
+check-tcc:
+	@BUNDLE_ID=com.prakashjoshipax.VoiceInk; \
+	if [ ! -d "$(INSTALL_PATH)" ]; then \
+		echo "$(INSTALL_PATH) is not installed."; \
+		exit 1; \
+	fi; \
+	codesign -dvvv "$(INSTALL_PATH)" 2>&1 | grep -E "^Authority=" || echo "Authority: none (ad-hoc signature)"; \
+	MISMATCH=$$(/usr/bin/log show --last 15m --predicate 'process == "tccd"' --info 2>/dev/null \
+		| grep "Failed to match existing code requirement for subject $$BUNDLE_ID" | tail -3); \
+	if [ -n "$$MISMATCH" ]; then \
+		echo ""; \
+		echo "$$MISMATCH"; \
+		echo ""; \
+		echo "macOS is rejecting this signature — every permission is pinned to an older"; \
+		echo "one, so the hotkey and the microphone are dead. Re-grant them:"; \
+		echo ""; \
+		echo "  osascript -e 'quit app \"VoiceInk\"'"; \
+		echo "  for s in ListenEvent Accessibility Microphone ScreenCapture; do \\"; \
+		echo "      tccutil reset \$$s $$BUNDLE_ID; done"; \
+		echo "  open -a VoiceInk"; \
+		echo ""; \
+		echo "Grant what macOS asks for, then quit and reopen the app once more."; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "No permission mismatch logged for $$BUNDLE_ID in the last 15 minutes."
 
 # Run application
 run:
@@ -215,6 +257,7 @@ help:
 	@echo "  local              Build for local use (ad-hoc — TCC perms reset on rebuild)"
 	@echo "  local-stable       Build with a stable codesign identity (TCC perms persist)"
 	@echo "    LOCAL_SIGN_IDENTITY=<SHA or name> overrides signing identity"
+	@echo "  check-tcc          Check whether macOS still recognises the installed build"
 	@echo "  run                Launch the built VoiceInk app"
 	@echo "  dev                Build and run the app (for development)"
 	@echo "  release            Build DMG and Appcast using release-notes/<version>.html"
