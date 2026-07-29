@@ -158,14 +158,14 @@ final class CLIBridgeService {
             if ephemeralLocal {
                 let mode = runtimeConfiguration.mode
                 let languages = TranscriptionLanguageSupport.validLanguagesOrFallback(
-                    mode?.selectedLanguages ?? [],
+                    mode.selectedLanguages,
                     for: model,
-                    realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+                    realtimeEnabled: mode.isRealtimeTranscriptionEnabled
                 )
                 let language = TranscriptionLanguageSupport.singleLanguage(
                     from: languages,
                     for: model,
-                    realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+                    realtimeEnabled: mode.isRealtimeTranscriptionEnabled
                 )
                 let context = TranscriptionRequestContext(
                     languages: languages,
@@ -200,7 +200,7 @@ final class CLIBridgeService {
                 enhancementService: engine.enhancementService
             )
             let transcription = try await service.retranscribeAudio(
-                from: tempWAV, using: model, mode: runtimeConfiguration.mode)
+                from: tempWAV, using: model, mode: runtimeConfiguration.mode).transcription
             return .success(Payload(
                 text: transcription.text,
                 enhancedText: transcription.enhancedText,
