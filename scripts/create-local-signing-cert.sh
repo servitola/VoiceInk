@@ -10,10 +10,19 @@ set -euo pipefail
 
 CERT_NAME="VoiceInk Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+BUNDLE_ID="com.prakashjoshipax.VoiceInk"
+
+# A certificate without its private key is not a signing identity: codesign
+# would fail later with a confusing error. Check for the identity, and clear an
+# orphaned certificate out of the way before creating a replacement.
+if security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null | grep -q "$CERT_NAME"; then
+    echo "Code-signing identity '$CERT_NAME' already exists in login keychain."
+    exit 0
+fi
 
 if security find-certificate -c "$CERT_NAME" "$KEYCHAIN" >/dev/null 2>&1; then
-    echo "Code-signing certificate '$CERT_NAME' already exists in login keychain."
-    exit 0
+    echo "Found '$CERT_NAME' without a usable private key — removing the orphan."
+    security delete-certificate -c "$CERT_NAME" "$KEYCHAIN" >/dev/null 2>&1 || true
 fi
 
 TMPDIR=$(mktemp -d)
@@ -64,3 +73,20 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCH
 echo "Done. Certificate '$CERT_NAME' is ready for codesign."
 echo "Tip: this cert is self-signed and only used locally — macOS will not trust"
 echo "the resulting binary on other machines, but it is enough to keep TCC stable."
+echo ""
+echo "=============================================================================="
+echo "  A NEW certificate was created, so macOS now sees VoiceInk as a different"
+echo "  app. Every existing permission is pinned to the OLD certificate and will be"
+echo "  silently ignored — the hotkey will do nothing until you re-grant them."
+echo ""
+echo "  Once the build finishes:"
+echo ""
+echo "    osascript -e 'quit app \"VoiceInk\"'"
+echo "    for s in ListenEvent Accessibility Microphone ScreenCapture; do \\"
+echo "        tccutil reset \$s $BUNDLE_ID; done"
+echo "    open -a VoiceInk"
+echo ""
+echo "  Grant the permissions macOS asks for, then quit and reopen the app once"
+echo "  more: a grant issued while the app is running does not reach it."
+echo "  See COMMON-ISSUES.md §12b."
+echo "=============================================================================="
