@@ -239,6 +239,22 @@ class LicenseViewModel: ObservableObject {
 }
 ```
 
+### 4. Kill Sparkle (VoiceInk/Info.plist, VoiceInk/VoiceInk.swift)
+
+A rebase brings back upstream's `SUFeedURL`, `SUPublicEDKey` and
+`SUEnableAutomaticChecks`/`SUScheduledCheckInterval`, and restores an `UpdaterViewModel`
+that constructs `SPUStandardUpdaterController(startingUpdater: true, ...)`. Left in place,
+the app checks upstream's appcast every four hours and installs the vendor's signed DMG
+over this fork — see the 2026-07-29 incident in the handoff below.
+
+Strip those keys from `Info.plist` (keeping `SUEnableAutomaticChecks` as `<false/>` is the
+belt-and-braces) and reduce `UpdaterViewModel` to inert stubs: `canCheckForUpdates` and
+`automaticallyChecksForUpdates` stay `false`, `checkForUpdates()` and
+`setAutomaticallyChecksForUpdates(_:)` do nothing. `SettingsView` and `MenuBarView` need
+only that surface. Do not delete the type — both take it from the environment.
+
+`VoiceInkTests/UpdaterViewModelTests.swift` fails if any of this regresses.
+
 ## Troubleshooting
 
 ### Build fails with "Library not loaded: @rpath/libwhisper.1.dylib"
@@ -548,146 +564,59 @@ Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
 
 ## Handoff
 
-**Latest (2026-07-26, third wake-word session): the "finish and send" word works, and was
-verified live** — the user dictated a message into this very chat with it and it sent itself.
-Built with `make local-stable`, installed and running; `VoiceInkTests` 76/76. Design and the
-non-obvious parts are in the wake word section above. The log of the run that proves it, with
-"лошадка" as the wake word and "авадакедавра" as the send word:
+**Latest (2026-07-29): Sparkle had silently replaced this fork with the vendor's build;
+fixed, rebuilt, installed, working.** `VoiceInkTests` 85/85, `voiceink transcribe` answers
+in 0.4 s, the LiteLLM shim on `:8178` is healthy, and `/Applications/VoiceInk.app` is signed
+`VoiceInk Local Signing` with no `SUFeedURL` in its `Info.plist`.
 
-```
-🎯 Wake word detected: (primary)      → 🎯 Wake word detected - starting recording
-heard: как как поступить авадакидавра?
-🎯 Wake word detected: (send)         → 🎯 Send wake word detected - finishing recording and pressing enter
-🎯 Closing wake word removed from transcription
-📝 After wake word removal: скажешь скажешь мне как поступить
-```
+One trigger, two defects, both now committed:
 
-Two things that run confirms beyond the unit tests. The send word **is** heard mid-dictation —
-9 s after the start here, comfortably past the shared 2.5 s cooldown. And the fuzzy match earns
-its keep: Parakeet returned "авадакидавра" for a configured "авадакедавра", one edit away, and
-it matched both to trigger *and* to come off the tail.
+**`5091ab9` — Sparkle installed upstream over the fork.** `Info.plist` still carried
+`SUFeedURL = beingpax.github.io/VoiceInk/appcast.xml` and a 14400 s check interval. At 08:57
+that day Sparkle downloaded and installed the vendor's signed 2.1 DMG over
+`/Applications/VoiceInk.app`. That build reinstates the license gate ("Trial Expired") and
+has no CLI transcribe listener, so every `voiceink transcribe` hung in `CFRunLoopRun`
+waiting for a reply that could never come. Proof it was Sparkle and not a manual install:
+`SULastCheckTime` 08:57:57 UTC against a bundle mtime of 08:57, and the installed bundle was
+signed `Developer ID Application: Prakash Joshi (V6J6A3VWY2)`.
 
-Still unverified, in rough order of interest: a `.respond`-output Mode (the send word should
-just finish, no Return); ⇧⏎ / ⌘⏎ instead of Return; and the "say it again to finish" tumbler
-turned **off** while a send word is set — "лошадка" mid-dictation must then not stop anything.
+The fork publishes no appcast of its own — the checked-in `appcast.xml` is upstream's,
+enclosing `Beingpax/VoiceInk/releases/download/v2.1/VoiceInk.dmg` — so there was never
+anything legitimate to check against. `UpdaterViewModel` no longer constructs
+`SPUStandardUpdaterController` at all. Updating the fork means `git pull && make local-stable`.
+See "Required Code Changes After Rebase" §4 — a rebase will bring all of this back.
 
-Previous state (2026-07-26, second wake-word session): **the whole round trip works, offline,
-and was watched end to end by the user** — which every previous session ended without ever
-seeing. Installed and running at `f7a9f9a`.
+**`d2e7b85` — `HEAD` had not compiled since the 2026-07-28 rebase.** Upstream 2.1 made
+`ModeRuntimeConfiguration.mode` non-optional and wrapped `retranscribeAudio`'s return in
+`AudioRetranscriptionResult`; `CLIBridgeService` stayed on the old API. This is why the
+substitution went unnoticed for a day — the fork could not be rebuilt, so nobody rebuilt it.
+The lesson generalises: **an upstream rebase can leave fork-only files uncompilable, and
+nothing tells you until you next build.** Worth a pre-push hook or CI that builds and runs
+`VoiceInkTests` before anything reaches `origin/main`.
 
-Say "лошадка" → recording starts. Dictate. Say "лошадка" → it finishes, transcribes and
-pastes, with both wake words stripped from the text. Verified live twice in the log:
+Backlog and topic entry point now live at `~/projects/serho_topics/voiceink/`
+(`BACKLOG.md`, `AGENTS.md`, symlink `repo`).
 
-```
-🎯 Wake word detected   (start)
-🎯 Wake word detected   (stop)
-🎯 Closing wake word removed from transcription
-```
+Next steps, in priority order:
 
-Local Parakeet on the user's USB microphone, `engine: localModel, onDevice recognition: true`,
-nothing leaving the machine, listening resuming after each dictation.
-
-The reason it never fired was not the recogniser and not the microphone selection fixed in
-the previous session: the `AVAudioEngine` tap was **never called at all**, so the detector
-was fed digital silence. Capture moved to `CoreAudioRecorder`. Full evidence in the wake word
-section — read it before touching the capture path.
-
-Apple Speech remains configurable but is a dead end here until macOS Dictation is enabled;
-with it off the server recogniser returns nothing at all, silently. The local engine is the
-default and needs none of it. The user's Speech Recognition grant was reset with `tccutil`
-during this session (they had accidentally dismissed a prompt), so macOS will ask again if
-they ever switch to the Apple backend.
-
-The crash that caused the `c61cdc7` revert does not reproduce with the restored design:
-`scripts/wake-word-crash-repro.sh` is 6/6 clean, and no crash report exists after 22:31.
-
-**Two bugs found by using it, both worth remembering.** The starting "лошадка" stopped the
-dictation it had just started, because both backends re-report a growing utterance from its
-beginning and the word stayed in every later result — fixed by `consumeSegment()`, not by the
-cooldown, which only covered the first seconds. And wake word removal from the transcript had
-been silently off for everyone forever: `bool(forKey:)` answers false for a key `@AppStorage`
-never writes. Check that pattern elsewhere — it fails in exactly the direction that looks
-like the feature is on.
-
-Earlier in the day (same session): multi-language selection was reworked — see
-the **Language selection (fork feature)** section above for the design and the Parakeet
-script-filter finding. Three things were wrong before this work and are now fixed:
-the multi-select `LanguageSelectionView` had **zero call sites** since upstream's AI Models
-page redesign (`8b63691`) and rendered for no model at all; local Whisper read the global
-`UserDefaults["SelectedLanguages"]` in `LibWhisper.fullTranscribe` and ignored the Mode's
-language entirely, so picking Russian silently transcribed English; and language lived only
-as a single string. The orphaned view was deleted and its toggle logic moved into
-`ModeConfigDraft.toggleLanguage`.
-
-`make local-stable` is green on arm64 **and** on the Intel path
-(`VOICEINK_TARGET_ARCH=x86_64`, verified in an earlier session), `VoiceInkTests` passes 76/76,
-and the app is installed to `/Applications/VoiceInk.app` and running from that build.
-
-Running the unit tests takes the same flags the local *app* build takes, not just
-`-only-testing`. Unlike a plain `build`, `test` has to **launch** the host app, and it dies
-before the harness connects under anything less:
-
-```bash
-./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
-  -destination 'platform=macOS' -only-testing:VoiceInkTests \
-  -derivedDataPath build/test-dd -xcconfig LocalBuild.xcconfig \
-  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" \
-  CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" \
-  PROVISIONING_PROFILE_SPECIFIER="" \
-  CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
-  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD' \
-  test
-```
-
-Each flag earns its place, and the failure modes look nothing like each other:
-`CODE_SIGNING_ALLOWED=NO` → the app is killed at launch; the project's own
-`DEVELOPMENT_TEAM` → "entitlements require a development certificate"; a *local* signing
-cert with `DEVELOPMENT_TEAM=""` → dyld refuses `whisper.framework` and `VoiceInk.debug.dylib`
-for "different Team IDs"; and without `LOCAL_BUILD` the app aborts inside CloudKit setup,
-since ad-hoc signing cannot carry the iCloud entitlement. `-only-testing:VoiceInkTests` is
-still needed on its own account: a plain `test` also builds `VoiceInkUITests`, whose runner
-is rejected by Gatekeeper ("VoiceInkUITests-Runner is damaged") under the local unsigned
-build, failing the whole run for an unrelated reason.
-
-**Always build with `make local-stable`, never plain `make local`** — ad-hoc signing has no
-stable code identity, so every reinstall changes the cdhash, macOS drops its TCC grants, and
-the app launches fine while silently ignoring the recording hotkey. Details in
-`COMMON-ISSUES.md` §12b and `BUILDING.md`.
-
-Next steps / open questions:
-- **Not verified at runtime**: dictate a mixed ru/en/el phrase on Parakeet V3, confirm the
-  `Languages` menu renders with the multi-script caption, and reopen the Mode after an app
-  restart to confirm the selection persisted.
-- Known limitation, deliberately out of scope: realtime Parakeet goes through
-  `StreamingTranscriptionProvider.connect(model:language:)`, which takes one locale, so a
-  same-script multi-selection (e.g. `ru + uk`) degrades to auto there while the batch path
-  keeps the cyrillic filter. No effect on mixed-script selections. Fixing it means widening
-  that protocol to `[String]` across ~10 providers.
-- Local commits are unpushed by design — check `git log origin/main..main` and push with
-  `--force-with-lease` (history is rebased, so a plain push is rejected).
-- `dotfiles_private` has 2 unpushed commits from earlier work (`ece8417`, `f3a5b5c`).
-- **Next task, and the only known rough edge: the first word is lost if the speaker does not
-  pause after the wake word.** `f7a9f9a` cut the worst of it — `firstPartialSamples` was
-  32_000 (2 s), so with no VAD speech-end event nothing was transcribed and recording had not
-  started yet; it is 12_000 (0.75 s) now. **That change is committed and installed but was
-  never observed working** — the user was asked to test and the session ended first. Verify
-  before doing anything else. The residual gap is irreducible by tuning: the word must be
-  spoken, recognised, and the recorder started. The complete fix is a pre-roll, handing the
-  detector's own buffered audio to the recording, which means reaching into how `Recorder`
-  writes its WAV. Offered to the user, not started.
-- Also unverified, carried over: unplug → "not connected" warning with the built-in mic NOT
-  taken; replug into a *different* port → rebinds by itself.
-- Worth watching now that the detector holds the microphone through a recording: two AUHAL
-  clients on the same device at once (its `CoreAudioRecorder` plus the dictation one). It
-  built and ran, but no one has yet confirmed the dictation audio is unaffected.
-- Parakeet transcribes any speech the VAD lets through, including audio from the speakers —
-  seen in the log during testing. No false triggers were produced, but a wake word that is a
-  common word would behave much worse than "лошадка".
-- The user's `prioritizedDevices` still lists the same physical USB mic three times under
-  three UIDs, a manual workaround for the bug `daf5f7e` fixed in `getCurrentDevice()`.
-  Two of those entries can now be deleted — worth offering.
-- Optional cleanup: `~/Library/Application Support/com.prakashjoshipax.VoiceInk/WhisperModels/`
-  still contains a junk `__MACOSX/` dir from an old unzip - safe to `rm -rf`.
+- **`VIK-001` — rip out the license UI.** The fork is free and `licenseState` is hardcoded
+  `.licensed`, but ~1400 lines of vendor paywall remain: `LicenseManagementView.swift` (872),
+  `LicenseView.swift` (61), `TrialMessageView.swift` (80), `OnboardingLicenseCards.swift`
+  (251), `LicenseViewModel.swift` (69), `LicenseManager.swift` (105). The sidebar's "About"
+  tab still offers "Buy License", "Lost Key?", "Manage License", "Deactivate", a key field
+  and an "Affiliate Program — Earn 30% from referrals" row. **Open question for the owner,
+  asked but not yet answered: drop the "About" tab entirely, or keep it and strip only the
+  licensing?** It also holds genuinely useful links — Recommended Models, Documentation,
+  Videos & Guides, Changelog, Report or Feedback.
+- **`VIK-003` — verify the replacement dictionary by eye.** The defaults domain survived the
+  substitution intact (shortcuts, `isWakeWordEnabled`, `modeConfigurationsV2`, provider keys).
+  The dictionary moved to SwiftData (`HasMigratedDictionaryToSwiftData_v2`), so it cannot be
+  checked from a shell — open Dictionary in the app and confirm the RU fixups are there. If
+  empty, import `~/projects/dotfiles/voiceink/VoiceInk_Settings_Backup.json` (`version` 1.74,
+  behind the app's schema) and re-export a fresh snapshot.
+- Still open from 2026-07-26, untouched by this session: dictate a mixed ru/en/el phrase on
+  Parakeet V3 and confirm the `Languages` menu renders with the multi-script caption and the
+  selection survives an app restart.
 
 ## Repository State
 
