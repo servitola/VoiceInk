@@ -238,18 +238,40 @@ class LicenseViewModel: ObservableObject {
     @Published var validationMessage: String?
     @Published private(set) var activationsLimit: Int = 999
 
+    static let shared = LicenseViewModel()
+
     init() {
         licenseState = .licensed
     }
 
-    func startTrial() {}
-    func validateLicense() async { licenseState = .licensed }
+    var hasVerifiedLicense: Bool { true }
+    var diagnosticLicenseStatus: String { "Licensed (free fork)" }
+    var usageRestrictionMessage: String? { nil }
+
+    @discardableResult
+    func startTrial() -> Bool { true }
+    func validateLicense(_ licenseKey: String = "") async { licenseState = .licensed }
     func deactivateLicense() async {}
     func revalidateLicense() {}
     func checkLicenseStatus() { licenseState = .licensed }
+    func refreshLicenseState() { licenseState = .licensed }
     func removeLicense() {}
 }
 ```
+
+This stub is the fork's entire licensing story, so it compiles only while it
+covers every member upstream calls — and upstream keeps adding to that list.
+After a rebase, check what the app actually wants before trusting the block
+above:
+
+```bash
+grep -rn "LicenseViewModel\." VoiceInk | grep -v Models/LicenseViewModel.swift
+```
+
+The 2.1 rebase dropped `shared`, `hasVerifiedLicense` and
+`diagnosticLicenseStatus` and changed two signatures. `HEAD` then stopped
+compiling — which is how Sparkle got away with replacing the fork for so long:
+nobody could rebuild it to notice.
 
 ### 4. Kill Sparkle (VoiceInk/Info.plist, VoiceInk/VoiceInk.swift)
 
@@ -573,6 +595,49 @@ two capture sessions opened, with the generation token cleaning up only afterwar
 chained through `startTask`.
 
 Tests: `VoiceInkTests/WakeWordDetectionTests.swift`.
+
+## Running the unit tests
+
+Testing takes the same flags the local *app* build takes, not just
+`-only-testing`. Unlike a plain `build`, `test` has to **launch** the host app, and it dies
+before the harness connects under anything less:
+
+```bash
+./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
+  -destination 'platform=macOS' -only-testing:VoiceInkTests \
+  -derivedDataPath .local-build-test -xcconfig LocalBuild.xcconfig \
+  -skipPackagePluginValidation -skipMacroValidation \
+  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" \
+  CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" \
+  PROVISIONING_PROFILE_SPECIFIER="" \
+  CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD' \
+  test
+```
+
+Each flag earns its place, and the failure modes look nothing like each other:
+`CODE_SIGNING_ALLOWED=NO` → the app is killed at launch; the project's own
+`DEVELOPMENT_TEAM` → "entitlements require a development certificate"; a *local* signing
+cert with `DEVELOPMENT_TEAM=""` → dyld refuses `whisper.framework` and `VoiceInk.debug.dylib`
+for "different Team IDs"; and without `LOCAL_BUILD` the app aborts inside CloudKit setup,
+since ad-hoc signing cannot carry the iCloud entitlement. `-only-testing:VoiceInkTests` is
+still needed on its own account: a plain `test` also builds `VoiceInkUITests`, whose runner
+is rejected by Gatekeeper ("VoiceInkUITests-Runner is damaged") under the local unsigned
+build, failing the whole run for an unrelated reason. The two `-skip*Validation` flags are
+the same ones `XCB_FLAGS` passes in the Makefile — see COMMON-ISSUES.md §19.
+
+Two more traps:
+
+- `print()` inside a test never reaches the xcodebuild log. Write to a file under
+  `NSTemporaryDirectory()` and read it afterwards.
+- Xcode still *builds* `VoiceInkUITests` even when `-only-testing` excludes it, and writing
+  into the previously signed `VoiceInkUITests-Runner.app` fails with `Operation not
+  permitted` (App Management protection, `com.apple.provenance`). Delete the stale bundle:
+  `rm -rf .local-build-test/Build/Products/Debug/VoiceInkUITests-Runner.app`.
+
+Known-failing on `main`: `WordReplacementServiceTests/underscoreCountsAsWordChar` — the
+Unicode word boundary treats `_` as a separator, so `foo_клод_bar` still gets replaced.
+`WakeWordRemovalTests/leavesTextAloneWhenNoSendWordIsConfigured` is order-flaky.
 
 ## Handoff
 
