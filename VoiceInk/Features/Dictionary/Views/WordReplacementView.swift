@@ -13,55 +13,25 @@ enum SortColumn {
     case replacement
 }
 
+enum WordReplacementSorting {
+    static func sorted(_ items: [WordReplacement], by mode: SortMode) -> [WordReplacement] {
+        let ascending = mode == .originalAsc || mode == .replacementAsc
+        let key: (WordReplacement) -> String =
+            (mode == .originalAsc || mode == .originalDesc) ? \.originalText : \.replacementText
+        return items.sorted {
+            let order = key($0).localizedCaseInsensitiveCompare(key($1))
+            return ascending ? order == .orderedAscending : order == .orderedDescending
+        }
+    }
+}
+
 struct WordReplacementView: View {
-    @Query private var wordReplacements: [WordReplacement]
     @Environment(\.modelContext) private var modelContext
     @State private var showAlert = false
-    @State private var editingReplacement: WordReplacement? = nil
     @State private var alertMessage = ""
-    @State private var sortMode: SortMode = .originalAsc
     @State private var originalWord = ""
     @State private var replacementWord = ""
     @State private var showInfoPopover = false
-
-    init() {
-        if let savedSort = UserDefaults.standard.string(forKey: "wordReplacementSortMode"),
-            let mode = SortMode(rawValue: savedSort)
-        {
-            _sortMode = State(initialValue: mode)
-        }
-    }
-
-    private var sortedReplacements: [WordReplacement] {
-        switch sortMode {
-        case .originalAsc:
-            return wordReplacements.sorted {
-                $0.originalText.localizedCaseInsensitiveCompare($1.originalText) == .orderedAscending
-            }
-        case .originalDesc:
-            return wordReplacements.sorted {
-                $0.originalText.localizedCaseInsensitiveCompare($1.originalText) == .orderedDescending
-            }
-        case .replacementAsc:
-            return wordReplacements.sorted {
-                $0.replacementText.localizedCaseInsensitiveCompare($1.replacementText) == .orderedAscending
-            }
-        case .replacementDesc:
-            return wordReplacements.sorted {
-                $0.replacementText.localizedCaseInsensitiveCompare($1.replacementText) == .orderedDescending
-            }
-        }
-    }
-
-    private func toggleSort(for column: SortColumn) {
-        switch column {
-        case .original:
-            sortMode = (sortMode == .originalAsc) ? .originalDesc : .originalAsc
-        case .replacement:
-            sortMode = (sortMode == .replacementAsc) ? .replacementDesc : .replacementAsc
-        }
-        UserDefaults.standard.set(sortMode.rawValue, forKey: "wordReplacementSortMode")
-    }
 
     private var shouldShowAddButton: Bool {
         !originalWord.isEmpty || !replacementWord.isEmpty
@@ -107,77 +77,12 @@ struct WordReplacementView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: shouldShowAddButton)
 
-            if !wordReplacements.isEmpty {
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Button(action: { toggleSort(for: .original) }) {
-                            HStack(spacing: 4) {
-                                Text("Original")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.secondary)
-
-                                if sortMode == .originalAsc || sortMode == .originalDesc {
-                                    Image(systemName: sortMode == .originalAsc ? "chevron.up" : "chevron.down")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Sort by original")
-
-                        Image(systemName: "arrow.right")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 10))
-                            .frame(width: 10)
-
-                        Button(action: { toggleSort(for: .replacement) }) {
-                            HStack(spacing: 4) {
-                                Text("Replacement")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.secondary)
-
-                                if sortMode == .replacementAsc || sortMode == .replacementDesc {
-                                    Image(systemName: sortMode == .replacementAsc ? "chevron.up" : "chevron.down")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Sort by replacement")
-                    }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 8)
-
-                    Divider()
-
-                    LazyVStack(spacing: 0) {
-                        ForEach(sortedReplacements, id: \.persistentModelID) { replacement in
-                            ReplacementRow(
-                                original: replacement.originalText,
-                                replacement: replacement.replacementText,
-                                onDelete: { removeReplacement(replacement) },
-                                onEdit: { editingReplacement = replacement }
-                            )
-
-                            if replacement.persistentModelID != sortedReplacements.last?.persistentModelID {
-                                Divider()
-                            }
-                        }
-                    }
-                }
-                .padding(.top, 4)
-            }
+            // The list is a separate view so a keystroke in the fields above cannot
+            // invalidate it. Re-sorting every row on every character is what made
+            // typing here unusable.
+            WordReplacementList()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: isEditingReplacement) {
-            if let editingReplacement {
-                EditReplacementSheet(replacement: editingReplacement, modelContext: modelContext)
-            }
-        }
         .alert("Word Replacement", isPresented: $showAlert) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -188,8 +93,9 @@ struct WordReplacementView: View {
     private func addReplacement() {
         let original = originalWord.trimmingCharacters(in: .whitespacesAndNewlines)
         let replacement = replacementWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existing = (try? modelContext.fetch(FetchDescriptor<WordReplacement>())) ?? []
         if let error = DictionaryService.addWordReplacement(
-            original: original, replacement: replacement, existing: Array(wordReplacements), context: modelContext)
+            original: original, replacement: replacement, existing: existing, context: modelContext)
         {
             alertMessage = error
             showAlert = true
@@ -197,6 +103,117 @@ struct WordReplacementView: View {
         }
         originalWord = ""
         replacementWord = ""
+    }
+}
+
+struct WordReplacementList: View {
+    @Query private var wordReplacements: [WordReplacement]
+    @Environment(\.modelContext) private var modelContext
+    @State private var sortMode: SortMode = .originalAsc
+    @State private var editingReplacement: WordReplacement? = nil
+    @State private var showAlert = false
+    @State private var alertMessage = ""
+
+    init() {
+        if let savedSort = UserDefaults.standard.string(forKey: "wordReplacementSortMode"),
+            let mode = SortMode(rawValue: savedSort)
+        {
+            _sortMode = State(initialValue: mode)
+        }
+    }
+
+    private func toggleSort(for column: SortColumn) {
+        switch column {
+        case .original:
+            sortMode = (sortMode == .originalAsc) ? .originalDesc : .originalAsc
+        case .replacement:
+            sortMode = (sortMode == .replacementAsc) ? .replacementDesc : .replacementAsc
+        }
+        UserDefaults.standard.set(sortMode.rawValue, forKey: "wordReplacementSortMode")
+    }
+
+    var body: some View {
+        if !wordReplacements.isEmpty {
+            let rows = WordReplacementSorting.sorted(wordReplacements, by: sortMode)
+            let lastID = rows.last?.persistentModelID
+
+            VStack(spacing: 0) {
+                header
+
+                Divider()
+
+                LazyVStack(spacing: 0) {
+                    ForEach(rows, id: \.persistentModelID) { replacement in
+                        ReplacementRow(
+                            original: replacement.originalText,
+                            replacement: replacement.replacementText,
+                            onDelete: { removeReplacement(replacement) },
+                            onEdit: { editingReplacement = replacement }
+                        )
+
+                        if replacement.persistentModelID != lastID {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .padding(.top, 4)
+            .sheet(isPresented: isEditingReplacement) {
+                if let editingReplacement {
+                    EditReplacementSheet(replacement: editingReplacement, modelContext: modelContext)
+                }
+            }
+            .alert("Word Replacement", isPresented: $showAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(alertMessage)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button(action: { toggleSort(for: .original) }) {
+                HStack(spacing: 4) {
+                    Text("Original")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    if sortMode == .originalAsc || sortMode == .originalDesc {
+                        Image(systemName: sortMode == .originalAsc ? "chevron.up" : "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .help("Sort by original")
+
+            Image(systemName: "arrow.right")
+                .foregroundColor(.secondary)
+                .font(.system(size: 10))
+                .frame(width: 10)
+
+            Button(action: { toggleSort(for: .replacement) }) {
+                HStack(spacing: 4) {
+                    Text("Replacement")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    if sortMode == .replacementAsc || sortMode == .replacementDesc {
+                        Image(systemName: sortMode == .replacementAsc ? "chevron.up" : "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .help("Sort by replacement")
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 8)
     }
 
     private func removeReplacement(_ replacement: WordReplacement) {
