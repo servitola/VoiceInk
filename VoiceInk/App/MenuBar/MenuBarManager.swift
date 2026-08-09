@@ -87,7 +87,7 @@ class MenuBarManager: ObservableObject {
     /// activation policy if needed. Recovery path for when both the Dock and menu
     /// bar icons are hidden and the user has no other affordance to reach the app.
     func focusMainWindow() {
-        activateForPresentedWindow(reason: "Focus Main Window")
+        activateForPresentedWindow()
         if WindowManager.shared.currentMainWindow() != nil {
             WindowManager.shared.showMainWindow()
         } else {
