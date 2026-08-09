@@ -9,6 +9,12 @@ version string didn't change — upstream ships fixes without bumping the versio
 installed app actually launches *and stays up* BEFORE pushing. If any gate fails, stop
 and fix — do not push.
 
+**Second rule: never leave a rebase unverified.** The compile + test gate (step 6) runs
+before the install (step 7) because it is the only step that works with a locked login
+keychain, which is how the 04:15 cron finds the machine. Reporting `SYNC_RESULT: FAILED`
+because the *install* could not sign is not the same as knowing the code compiles — and
+that gap is what left `HEAD` broken twice while the rebase sat in `main`.
+
 ## Working branch & remotes
 
 - Our working branch is **`main`**, tracking **`origin/main`** (`origin` = `servitola/VoiceInk`).
@@ -138,7 +144,65 @@ grep -m2 -E "MARKETING_VERSION|CURRENT_PROJECT_VERSION" VoiceInk.xcodeproj/proje
 # sed -i '' 's/MARKETING_VERSION = 1.70;/MARKETING_VERSION = 1.71;/g; s/CURRENT_PROJECT_VERSION = 170;/CURRENT_PROJECT_VERSION = 171;/g' VoiceInk.xcodeproj/project.pbxproj
 ```
 
-### 6. Build + install locally — use `make local-stable`, NOT `make build`
+### 6. Compile + test gate — runs headless, never touches the keychain
+
+**This gate comes before the install on purpose.** It signs ad-hoc into
+`.local-build-test/`, so it works with a locked login keychain — which is the state the
+nightly cron actually runs in. The install in step 7 needs the `VoiceInk Local Signing`
+private key and *will* fail when the keychain is locked; if that step ran first, its
+failure would abort the sync before anything ever checked that the rebase compiles.
+That is exactly how a non-compiling `HEAD` shipped twice (2026-07-28, 2026-08-09) —
+the rebase landed, the install failed on the keychain, and nobody learned the code was
+broken until someone needed a rebuild.
+
+The unit tests are hosted by the app, so the host must also build with `LOCAL_BUILD` +
+local entitlements, and needs the `libwhisper` rpath symlink (the test build dir doesn't
+get it automatically — that missing symlink is exactly what makes the host crash at
+bootstrap with `Library not loaded: @rpath/libwhisper.1.dylib`).
+
+```bash
+# Build the test host (LOCAL_BUILD avoids the CloudKit trap)
+xcodebuild build-for-testing \
+  -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
+  -derivedDataPath .local-build-test -destination 'platform=macOS' \
+  -skipPackagePluginValidation -skipMacroValidation \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" \
+  CODE_SIGN_ENTITLEMENTS="$(pwd)/VoiceInk/VoiceInk.local.entitlements" \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD'
+
+# Add the rpath symlink dyld needs (host embeds whisper.framework but not this link)
+ln -sfn whisper.framework/Versions/A/whisper \
+  .local-build-test/Build/Products/Debug/VoiceInk.app/Contents/Frameworks/libwhisper.1.dylib
+
+# Run unit tests only (VoiceInkUITests drive a live app — skip in this gate)
+xcodebuild test-without-building \
+  -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
+  -derivedDataPath .local-build-test -only-testing:VoiceInkTests \
+  -skipPackagePluginValidation -skipMacroValidation \
+  -destination 'platform=macOS'
+```
+
+Both `-skip*Validation` flags are mandatory on Xcode 16+: mlx-swift's `CudaBuild` plugin
+and mlx-swift-lm's `MLXHuggingFaceMacros` are untrusted from the command line and the
+trust prompt only exists in the GUI. See COMMON-ISSUES.md §19.
+
+If `build-for-testing` fails to write into `VoiceInkUITests-Runner.app` with `Operation
+not permitted`, delete the stale bundle — macOS App Management protects the previously
+signed copy: `rm -rf .local-build-test/Build/Products/Debug/VoiceInkUITests-Runner.app`.
+
+Gate: exit 0 and every `Test case … passed`. If a test fails, it usually means a
+conflict resolution was wrong (e.g. `WordReplacementService`) — fix the code, not the
+test. (`.local-build-test/` is gitignored.)
+
+Known red on `main`: `WordReplacementServiceTests/underscoreCountsAsWordChar`. Treat any
+*other* failure as a blocker.
+
+**A compile error here is the whole point of the gate.** Our fork keeps stubs that
+shadow upstream files — `LicenseViewModel` above all — so upstream can change a call site
+and the rebase will replay our stub cleanly, conflict-free, and still not build. Never
+report the sync as succeeded when this step did not run.
+
+### 7. Build + install locally — use `make local-stable`, NOT `make build`
 
 **Do not use `make build` + rsync for the installed app.** That produces a Debug build
 with the default entitlements (CloudKit enabled) which, when ad-hoc signed, **SIGTRAPs on
@@ -179,37 +243,6 @@ security find-identity -p codesigning | grep "VoiceInk Local"   # must list it
 
 Expect `** BUILD SUCCEEDED **` and `Build complete! App installed to: /Applications/VoiceInk.app`.
 If it fails on missing whisper headers/dylib, see the **whisper rebuild** appendix.
-
-### 7. Test gate — all green before pushing
-
-The unit tests are hosted by the app, so the host must also build with `LOCAL_BUILD` +
-local entitlements, and needs the `libwhisper` rpath symlink (the test build dir doesn't
-get it automatically — that missing symlink is exactly what makes the host crash at
-bootstrap with `Library not loaded: @rpath/libwhisper.1.dylib`).
-
-```bash
-# Build the test host (LOCAL_BUILD avoids the CloudKit trap)
-xcodebuild build-for-testing \
-  -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
-  -derivedDataPath .local-build-test -destination 'platform=macOS' \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" \
-  CODE_SIGN_ENTITLEMENTS="$(pwd)/VoiceInk/VoiceInk.local.entitlements" \
-  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD'
-
-# Add the rpath symlink dyld needs (host embeds whisper.framework but not this link)
-ln -sfn whisper.framework/Versions/A/whisper \
-  .local-build-test/Build/Products/Debug/VoiceInk.app/Contents/Frameworks/libwhisper.1.dylib
-
-# Run unit tests only (VoiceInkUITests drive a live app — skip in this gate)
-xcodebuild test-without-building \
-  -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
-  -derivedDataPath .local-build-test -only-testing:VoiceInkTests \
-  -destination 'platform=macOS'
-```
-
-Gate: exit 0 and every `Test case … passed`. If a test fails, it usually means a
-conflict resolution was wrong (e.g. `WordReplacementService`) — fix the code, not the
-test. (`.local-build-test/` is gitignored.)
 
 ### 8. Verify the installed app launches AND stays up
 
