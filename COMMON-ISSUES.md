@@ -489,6 +489,39 @@ diskutil info / | grep "File System Personality"
 
 ---
 
+### 19. Build dies on mlx-swift's plugin, its macro, or a missing Metal toolchain
+
+**Likelihood**: Certain on Xcode 16 and newer, including after a routine Xcode upgrade
+
+**Symptoms**: the build never reaches a single Swift file and stops at one of
+
+```
+Plugin "CudaBuild" from package "mlx-swift" must be enabled before it can be used
+Macro "MLXHuggingFaceMacros" from package "mlx-swift-lm" must be enabled before it can be used
+error: cannot execute tool 'metal' due to missing Metal Toolchain
+```
+
+**Why it happens**: Xcode will not run an untrusted package plugin or macro, and only offers
+the trust prompt in the GUI — a command-line build has no way to answer it. Separately,
+Xcode 26 stopped bundling the Metal toolchain that mlx-swift's shaders need, so an Xcode
+upgrade breaks a repo that built fine the day before.
+
+**Solution**: the two flags live in `XCB_FLAGS` in the Makefile and in
+`scripts/release.sh`, so `make build`, `make local-stable` and `make release` are covered.
+Anything hand-rolled needs them spelled out:
+
+```bash
+xcodebuild ... -skipPackagePluginValidation -skipMacroValidation
+```
+
+The toolchain is a one-time download:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+---
+
 ## Prevention Best Practices
 
 ### Before Building
