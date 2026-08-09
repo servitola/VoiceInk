@@ -12,6 +12,13 @@ RUN_APP_NAME ?= VoiceInk
 DEBUG_APP_NAME := VoiceInk Dev
 INSTALL_PATH := /Applications/VoiceInk.app
 
+# mlx-swift ships a `CudaBuild` prebuild plugin and mlx-swift-lm an
+# `MLXHuggingFaceMacros` macro. Xcode refuses to run either unvalidated from the
+# command line ("must be enabled before it can be used") and there is no CLI
+# equivalent of the GUI trust prompt, so every xcodebuild invocation here has to
+# opt out explicitly.
+XCB_FLAGS := -skipPackagePluginValidation -skipMacroValidation
+
 .PHONY: all clean whisper setup build local local-stable check check-tcc healthcheck check-env help dev run cli install-cli fix-derived-app release release-setup
 
 # Default target
@@ -71,10 +78,7 @@ setup: whisper
 	@echo "Please ensure your Xcode project references the framework from this new location."
 
 build: setup
-	./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug CODE_SIGN_IDENTITY="" \
-		-skipPackagePluginValidation \
-		-skipMacroValidation \
-		build
+	./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug $(XCB_FLAGS) CODE_SIGN_IDENTITY="" build
 	@$(MAKE) --no-print-directory fix-derived-app
 
 # Add missing libwhisper.1.dylib symlink to the Debug build in DerivedData so
@@ -111,14 +115,13 @@ local: check setup
 	./scripts/arch-xcodebuild.sh -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
 		-derivedDataPath "$(LOCAL_DERIVED_DATA)" \
 		-xcconfig LocalBuild.xcconfig \
+		$(XCB_FLAGS) \
 		CODE_SIGN_IDENTITY="$(LOCAL_SIGN_IDENTITY)" \
 		CODE_SIGNING_REQUIRED=NO \
 		CODE_SIGNING_ALLOWED=YES \
 		DEVELOPMENT_TEAM="" \
 		CODE_SIGN_ENTITLEMENTS="$(CURDIR)/VoiceInk/VoiceInk.local.entitlements" \
 		SWIFT_ACTIVE_COMPILATION_CONDITIONS='$$(inherited) LOCAL_BUILD' \
-		-skipPackagePluginValidation \
-		-skipMacroValidation \
 		build
 	@APP_PATH="$(LOCAL_DERIVED_DATA)/Build/Products/Release/VoiceInk.app" && \
 	if [ -d "$$APP_PATH" ]; then \
