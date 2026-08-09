@@ -257,6 +257,8 @@ else
             -project "$PROJECT_PATH" \
             -scheme "$SCHEME" \
             -configuration Release \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             -archivePath "$ARCHIVE_PATH"
     fi
 
