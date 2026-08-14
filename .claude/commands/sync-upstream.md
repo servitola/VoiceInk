@@ -10,10 +10,19 @@ installed app actually launches *and stays up* BEFORE pushing. If any gate fails
 and fix — do not push.
 
 **Second rule: never leave a rebase unverified.** The compile + test gate (step 6) runs
-before the install (step 7) because it is the only step that works with a locked login
-keychain, which is how the 04:15 cron finds the machine. Reporting `SYNC_RESULT: FAILED`
-because the *install* could not sign is not the same as knowing the code compiles — and
-that gap is what left `HEAD` broken twice while the rebase sat in `main`.
+before the install (step 7). Reporting failure because the *install* could not sign is
+not the same as knowing the code compiles — and that gap is what left `HEAD` broken
+three times while the rebase sat in `main` (2026-07-28, 08-09, 08-14).
+
+> **This runbook is for a human doing the sync by hand.** The nightly 04:15 job stopped
+> executing it on 2026-08-14: it is now deterministic shell in
+> `dotfiles/cron/scripts/voiceink-upstream-sync.sh`, with no agent. Handing these steps
+> to an agent cost 45 minutes a night and still shipped a non-compiling `HEAD` three
+> times, because the agent re-decided what to do every run and the gate never actually
+> ran. Two invariants the script enforces and this runbook must not contradict:
+> `make local-stable` is never called (it can mint a fresh certificate and silently drop
+> every TCC grant — use `make local LOCAL_SIGN_IDENTITY=<sha1>`), and `~/.netrc` must
+> carry a `machine github.com` line (see COMMON-ISSUES.md §20).
 
 ## Working branch & remotes
 
@@ -202,7 +211,7 @@ shadow upstream files — `LicenseViewModel` above all — so upstream can chang
 and the rebase will replay our stub cleanly, conflict-free, and still not build. Never
 report the sync as succeeded when this step did not run.
 
-### 7. Build + install locally — use `make local-stable`, NOT `make build`
+### 7. Build + install locally — `make local` with an explicit identity
 
 **Do not use `make build` + rsync for the installed app.** That produces a Debug build
 with the default entitlements (CloudKit enabled) which, when ad-hoc signed, **SIGTRAPs on
@@ -211,35 +220,42 @@ family compiles with `LOCAL_BUILD` (SwiftData CloudKit → `.none`) +
 `VoiceInk.local.entitlements`, installs to `/Applications`, and adds the
 `libwhisper.1.dylib` rpath symlink.
 
-**Use `local-stable`, not plain `local`.** `make local` defaults to
-`LOCAL_SIGN_IDENTITY = -` (ad-hoc), and an ad-hoc signature has no stable code identity:
-every reinstall produces a new cdhash, so macOS treats the app as a *different* app and
-**silently drops its TCC grants** — Accessibility / Input Monitoring / Microphone. The
-symptom is nasty because the app still launches fine, it just stops reacting to the
-recording hotkey. `make local-stable` signs with the self-signed `VoiceInk Local Signing`
-identity instead, so permissions survive every rebuild (granted once, by hand).
+**Never plain `make local`, and never `make local-stable` either.** `make local` defaults
+to `LOCAL_SIGN_IDENTITY = -` (ad-hoc), and an ad-hoc signature has no stable code
+identity: every reinstall produces a new cdhash, so macOS treats the app as a *different*
+app and **silently drops its TCC grants** — Accessibility / Input Monitoring /
+Microphone. The symptom is nasty because the app still launches fine, it just stops
+reacting to the recording hotkey.
+
+`make local-stable` signs correctly, but on its way there it runs
+`scripts/create-local-signing-cert.sh`, and that script **deletes the certificate and
+mints a new one** whenever `security find-identity` fails to see it. A new certificate is
+a new Designated Requirement, which drops exactly the grants the stable identity exists
+to protect. Resolve the existing identity and pass it in yourself:
 
 ```bash
 cd /Volumes/SanDisk/projects/voiceink
-make local-stable
+SIGN_ID=$(security find-identity -p codesigning \
+          | awk 'index($0, "VoiceInk Local Signing") {print $2; exit}')
+[ -n "$SIGN_ID" ] || echo "STOP — do not mint a new cert, restore from backup instead"
+make local LOCAL_SIGN_IDENTITY="$SIGN_ID"
 ```
 
 Expect `Using signing identity: <sha1>` in the output, and afterwards
 `codesign -dv /Applications/VoiceInk.app` must report
 `Authority=VoiceInk Local Signing` — **never** `Signature=adhoc`.
 
-If it aborts with `Failed to locate 'VoiceInk Local Signing' in keychain`, or codesign
-fails on a cert that exists, the keychain holds a **certificate without its private key**
-(`security find-certificate` finds it, `security find-identity -p codesigning` does not).
-Delete the orphan and recreate it:
+If `$SIGN_ID` comes back empty, **do not** recreate the certificate. Restore the key:
 
 ```bash
-security delete-certificate -c "VoiceInk Local Signing" ~/Library/Keychains/login.keychain-db
-./scripts/create-local-signing-cert.sh
-security find-identity -p codesigning | grep "VoiceInk Local"   # must list it
+security import ~/.config/voiceink/local-signing.p12 \
+  -k ~/Library/Keychains/login.keychain-db -P voiceink-local -T /usr/bin/codesign
 ```
 
-`CSSMERR_TP_NOT_TRUSTED` next to it is expected and fine for a self-signed cert.
+Note which command you check with. `security find-identity -v` hides this certificate —
+`-v` means "valid only" and a self-signed cert is `CSSMERR_TP_NOT_TRUSTED`. Without `-v`
+it is listed under *Matching identities* and signs perfectly well. Reading `-v` as "the
+private key is gone" is how you end up deleting a working identity.
 
 Expect `** BUILD SUCCEEDED **` and `Build complete! App installed to: /Applications/VoiceInk.app`.
 If it fails on missing whisper headers/dylib, see the **whisper rebuild** appendix.
