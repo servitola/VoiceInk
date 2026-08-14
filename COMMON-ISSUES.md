@@ -351,14 +351,23 @@ open -a VoiceInk
 
 If a stale entry survives in System Settings → Privacy & Security → Accessibility / Input Monitoring, remove it with `−` before granting again, otherwise the system holds on to the old record.
 
-**If `make local-stable` fails** with `Failed to locate a usable 'VoiceInk Local Signing' identity`, the keychain holds a **certificate whose private key is missing** — a cert alone is not a signing identity. `create-local-signing-cert.sh` now detects this, deletes the orphan and creates a working identity, so just run it directly:
+**If the identity looks missing, check twice before touching it.** `security find-identity -v` does **not** list this certificate: `-v` means "valid identities only" and a self-signed cert is `CSSMERR_TP_NOT_TRUSTED`. Without `-v` it appears under *Matching identities* and signs perfectly well. Prove it with the only test that matters:
 
 ```bash
-./scripts/create-local-signing-cert.sh
-security find-identity -p codesigning | grep "VoiceInk Local"   # must now list it
+security find-identity -p codesigning | grep "VoiceInk Local"   # expect CSSMERR_TP_NOT_TRUSTED — fine
+cp /bin/echo /tmp/sigtest && codesign --force --sign "VoiceInk Local Signing" /tmp/sigtest
 ```
 
-Expect `CSSMERR_TP_NOT_TRUSTED` next to it — that is normal for a self-signed certificate and does not stop codesign.
+If that signs, nothing is wrong. **Do not run `create-local-signing-cert.sh` to "fix" it** — that script deletes the certificate and mints a new one, which is a new Designated Requirement, which drops every TCC grant you are trying to preserve. `make local-stable` calls it, which is why unattended builds must use `make local LOCAL_SIGN_IDENTITY=<sha1>` instead.
+
+If codesign genuinely fails, restore the key from the backup rather than minting a new one:
+
+```bash
+security import ~/.config/voiceink/local-signing.p12 \
+  -k ~/Library/Keychains/login.keychain-db -P voiceink-local -T /usr/bin/codesign
+```
+
+Only when there is no backup and no working key is `./scripts/create-local-signing-cert.sh` the answer — and then every permission has to be granted again by hand.
 
 ---
 
@@ -518,6 +527,86 @@ The toolchain is a one-time download:
 
 ```bash
 xcodebuild -downloadComponent MetalToolchain
+```
+
+---
+
+### 20. An unattended build hangs while resolving packages
+
+**Likelihood**: certain for a scheduled build, every time upstream adds or bumps a
+binary artifact (`TranscribeCpp`, `NemoTextProcessing`, `Sparkle`)
+
+**Symptoms**: `xcodebuild` sits at `Resolve Package Graph` forever. A sample of the
+process shows the wait, and nothing in the log says why:
+
+```
+Workspace.BinaryArtifactsManager.download(artifact:destination:progress:)
+  HTTPClient.execute(_:observabilityScope:progress:)
+    CompositeAuthorizationProvider.authentication(for:)
+      KeychainAuthorizationProvider.get(protocolHostPort:created:modified:)
+        SecItemCopyMatching → CSSM_DecryptDataFinal → mach_msg
+```
+
+**Why it happens**: before downloading a binary artifact, SwiftPM asks for
+credentials for its host in the order `~/.netrc` → login keychain. With no
+`github.com` line in netrc it falls through to the keychain item `github.com`,
+whose partition list holds only `git-credential-osxkeychain` — so reading it needs
+authorization. In a session with a GUI that is a dialog; unattended at 04:15 nobody
+clicks it and the build waits forever.
+
+The confusing part is that the same command run from a **background** session (a
+launchd job with no Aqua session, `launchctl managername` = `Background`) succeeds:
+no GUI is possible, so securityd fails the query immediately instead of prompting,
+and SwiftPM carries on without credentials — the asset is public and needs none.
+So the failure appears only where it hurts.
+
+**Solution**: give netrc the answer so the keychain is never consulted.
+
+```bash
+printf 'machine github.com\n    login <user>\n    password %s\n' "$(gh auth token)" >> ~/.netrc
+chmod 600 ~/.netrc
+```
+
+`git-credential-osxkeychain` rewrites the keychain item and resets its partition
+list whenever the token refreshes, so blessing the item instead of using netrc does
+not stay fixed.
+
+---
+
+### 21. `test` dies on `Assertion failed: childPID > 0` before any test runs
+
+**Likelihood**: certain when `xcodebuild test` is started from a background session
+
+**Symptoms**:
+
+```
+DVTAssertions: ASSERTION FAILURE in IDELaunchServicesLauncher.m:418
+Details:  Assertion failed: childPID > 0
+Testing started
+Abort trap: 6
+```
+
+**Why it happens**: the unit tests are hosted by the app, so the runner has to
+*launch* it through LaunchServices — which only reports a PID inside the user's Aqua
+session. From a background session it returns `procNotFound` and the launcher
+aborts. The check that separates this from a real bug is one line:
+
+```bash
+launchctl managername      # "Aqua" → tests can run; "Background" → they cannot
+open -W -n /Applications/VoiceInk.app
+# background session: Unable to block on application (GetProcessPID() returned …)
+```
+
+The app itself is fine — running its binary directly works, and the same `open -W`
+fails against a known-good installed build.
+
+**Solution**: run the tests from a terminal in the logged-in session, or from a
+LaunchAgent in `gui/$UID` (which is where the nightly sync runs — see
+`dotfiles/cron/scripts/voiceink-upstream-sync.sh`). A crashed run orphans its test
+host, and that leftover instance breaks the *next* run the same way, so kill it:
+
+```bash
+pkill -9 -f '.local-build-test/Build/Products/Debug/VoiceInk.app/Contents/MacOS'
 ```
 
 ---
