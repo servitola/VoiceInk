@@ -10,10 +10,23 @@ The build auto-detects the host CPU, so the **same command works on both**:
 make local-stable   # or: make local / make build
 ```
 
-Use `make local-stable`. `make local` signs ad-hoc, which makes macOS revoke the
-app's permissions on every reinstall; it now refuses to overwrite a stably-signed
-`/Applications/VoiceInk.app` unless you pass `FORCE_ADHOC=1`. `make check-tcc`
-answers "does macOS still recognise the installed build?" — see COMMON-ISSUES.md §12b.
+Never plain `make local`: it signs ad-hoc, so macOS revokes the app's permissions on
+every reinstall (it now refuses to overwrite a stably-signed `/Applications/VoiceInk.app`
+unless you pass `FORCE_ADHOC=1`).
+
+`make local-stable` is right only for the **first** build on a machine, where it creates
+the `VoiceInk Local Signing` certificate. Once that certificate exists, pass it in
+explicitly instead — `local-stable` runs `scripts/create-local-signing-cert.sh`, which
+deletes and re-mints the certificate whenever `security find-identity` fails to see it,
+and a new certificate drops every TCC grant silently:
+
+```bash
+make local LOCAL_SIGN_IDENTITY="$(security find-identity -p codesigning \
+  | awk 'index($0, "VoiceInk Local Signing") {print $2; exit}')"
+```
+
+`make check-tcc` answers "does macOS still recognise the installed build?" — see
+COMMON-ISSUES.md §12b.
 
 - **Apple Silicon (arm64):** builds the full app, including the Parakeet
   (FluidAudio) engine.
@@ -641,7 +654,49 @@ Unicode word boundary treats `_` as a separator, so `foo_клод_bar` still get
 
 ## Handoff
 
-**Latest (2026-07-29): Sparkle had silently replaced this fork with the vendor's build;
+**Latest (2026-08-14): the nightly sync had never once succeeded; rewritten without an
+agent, `HEAD` un-broken, 2.11 installed.** The 04:15 job had been reporting `FAILED` every
+day since it was created — the log contains no `VERIFIED ok` at all. The rebase half
+always worked; the gate half never ran, so nobody learned that `HEAD` had not compiled
+since the 08-14 rebase (fourth time this has happened).
+
+**`e041d21` — duplicate `getCurrentDevice()`.** Upstream `630ae52` moved it into the new
+`AudioDeviceManager+RecordingRouting` extension. Our wake-word commit had edited it in
+place, so the rebase replayed that edit as a fresh *addition* in
+`AudioDeviceManager.swift`, conflict-free, and both copies survived: `ambiguous use of
+getCurrentDevice()` in `Recorder.swift` and `MenuBarView.swift`. Deleting ours lost
+nothing — upstream's `.prioritized` branch already resolves through
+`findAvailableDevice(uid:modelUID:)`, which is the fix ours carried. **This is the shape
+to expect from every rebase: our patch replays cleanly and still does not build.**
+
+**Why the gate never ran.** 08-03…08-09 it sat *after* the install and the install could
+not sign. Once reordered, 08-12…08-14 it hung in `SecItemCopyMatching`: SwiftPM asks the
+login keychain for `github.com` credentials before downloading a binary artifact (upstream
+2.11 added `TranscribeCpp`), and that is an authorization dialog nobody is awake to click.
+Fixed with a `machine github.com` line in `~/.netrc` — COMMON-ISSUES.md §20 has the full
+mechanism, including why the same build succeeds from a background session.
+
+**`codex exec` is out of the nightly job.** `dotfiles/cron/scripts/voiceink-upstream-sync.sh`
+is deterministic shell now: preflight (signing identity present, netrc has github.com)
+→ fetch → backup branch → rebase → compile+test gate → `make local` with an explicit
+identity → verify. A rebase conflict aborts and asks for a human instead of being
+resolved by an agent; `rerere` is on so the manual resolution is reused. Verified live:
+`VERIFIED ok — 2.11 (211)`.
+
+**`make local-stable` must never run unattended.** It calls
+`scripts/create-local-signing-cert.sh`, which deletes the certificate and mints a new one
+whenever `security find-identity` fails to see it — a new Designated Requirement, so every
+TCC grant drops silently and the hotkey dies. Use `make local LOCAL_SIGN_IDENTITY=<sha1>`.
+The key is backed up at `~/.config/voiceink/local-signing.p12` (password `voiceink-local`);
+it existed in exactly one place until now. Also: `security find-identity -v` does **not**
+list this certificate — `-v` is "valid only" and a self-signed cert is
+`CSSMERR_TP_NOT_TRUSTED`. That is not a missing private key. Check without `-v`.
+
+Unit tests cannot be run from a background session at all — see COMMON-ISSUES.md §21.
+
+---
+
+**2026-07-29: Sparkle had silently replaced this fork with the vendor's build;
 fixed, rebuilt, installed, working.** `VoiceInkTests` 85/85, `voiceink transcribe` answers
 in 0.4 s, the LiteLLM shim on `:8178` is healthy, and `/Applications/VoiceInk.app` is signed
 `VoiceInk Local Signing` with no `SUFeedURL` in its `Info.plist`.
@@ -660,7 +715,9 @@ signed `Developer ID Application: Prakash Joshi (V6J6A3VWY2)`.
 The fork publishes no appcast of its own — the checked-in `appcast.xml` is upstream's,
 enclosing `Beingpax/VoiceInk/releases/download/v2.1/VoiceInk.dmg` — so there was never
 anything legitimate to check against. `UpdaterViewModel` no longer constructs
-`SPUStandardUpdaterController` at all. Updating the fork means `git pull && make local-stable`.
+`SPUStandardUpdaterController` at all. Updating the fork means the nightly sync, or
+`git pull && make local LOCAL_SIGN_IDENTITY=<sha1>` by hand (see the 08-14 entry above —
+`make local-stable` can mint a fresh certificate and drop every TCC grant).
 See "Required Code Changes After Rebase" §4 — a rebase will bring all of this back.
 
 **`d2e7b85` — `HEAD` had not compiled since the 2026-07-28 rebase.** Upstream 2.1 made
