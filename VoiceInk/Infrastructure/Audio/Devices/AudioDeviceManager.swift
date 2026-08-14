@@ -296,26 +296,6 @@ class AudioDeviceManager: ObservableObject {
         notifyDeviceChange()
     }
 
-    func getCurrentDevice() -> AudioDeviceID {
-        switch inputMode {
-        case .systemDefault:
-            return getSystemDefaultDevice() ?? findBestAvailableDevice() ?? 0
-        case .custom:
-            if let id = selectedDeviceID, isDeviceAvailable(id) {
-                return id
-            }
-            return findBestAvailableDevice() ?? 0
-        case .prioritized:
-            let sortedDevices = prioritizedDevices.sorted { $0.priority < $1.priority }
-            for device in sortedDevices {
-                if let available = findAvailableDevice(uid: device.id, modelUID: device.modelUID) {
-                    return available.id
-                }
-            }
-            return findBestAvailableDevice() ?? 0
-        }
-    }
-
     private func loadPrioritizedDevices() {
         if let data = UserDefaults.standard.prioritizedDevicesData,
             let devices = try? JSONDecoder().decode([PrioritizedDevice].self, from: data)
