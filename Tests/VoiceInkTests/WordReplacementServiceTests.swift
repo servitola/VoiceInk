@@ -1,6 +1,7 @@
 import Testing
 @testable import VoiceInk
 
+@MainActor
 struct WordReplacementServiceTests {
     private let service = WordReplacementService.shared
 
