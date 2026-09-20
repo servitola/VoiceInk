@@ -165,12 +165,15 @@ struct TrailingWakeWordRemovalTests {
     /// `@AppStorage`'s default does not write it. That silently disabled wake
     /// word removal for everyone who left the settings toggle alone, while the
     /// UI showed it as on.
+    /// A private domain, not `.standard`: the test host shares the real app's
+    /// preferences, so the old version rewrote the running VoiceInk's own setting
+    /// and then raced every sibling test that reads it through
+    /// TranscriptionOutputFilter — green alone, red in a full parallel run.
     @Test func removalIsOnUntilItIsExplicitlyTurnedOff() {
-        let defaults = UserDefaults.standard
-        let original = defaults.object(forKey: "removeWakeWordFromTranscription")
-        defer { defaults.setValue(original, forKey: "removeWakeWordFromTranscription") }
+        let suite = "VoiceInkTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
 
-        defaults.removeObject(forKey: "removeWakeWordFromTranscription")
         #expect(defaults.removeWakeWordFromTranscription)
 
         defaults.removeWakeWordFromTranscription = false
