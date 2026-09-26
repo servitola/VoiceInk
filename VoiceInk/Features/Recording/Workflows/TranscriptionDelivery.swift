@@ -47,7 +47,12 @@ final class TranscriptionDelivery {
         }
 
         if let text = request.text {
-            await paste(text, sendAfterPaste: request.sendAfterPaste, actions: actions)
+            await paste(
+                text,
+                output: request.output,
+                sendAfterPaste: request.sendAfterPaste,
+                actions: actions
+            )
         } else {
             await actions.dismiss()
         }
@@ -162,7 +167,12 @@ final class TranscriptionDelivery {
         String(format: "%.3f", duration)
     }
 
-    private func paste(_ text: String, sendAfterPaste: Bool, actions: Actions) async {
+    private func paste(
+        _ text: String,
+        output: OutputRuntimeConfiguration,
+        sendAfterPaste: Bool,
+        actions: Actions
+    ) async {
         let textToPaste = deliverableText(from: text)
         let appendSpace = UserDefaults.standard.bool(forKey: "AppendTrailingSpace")
         let pastedText = textToPaste + (appendSpace ? " " : "")
@@ -171,8 +181,14 @@ final class TranscriptionDelivery {
 
         let pasteTask = CursorPaster.startPasteAtCursor(pastedText)
 
+        // The send wake word brings its own key *and* its own decision to send, so
+        // it fires without the caller having asked for one. Everything else follows
+        // upstream: the global key, pressed only when the send action was used.
         let selectedKey = FinishAndSendSettings.selectedKey
-        let finishAndSendKey: FinishAndSendKey = sendAfterPaste ? selectedKey : .none
+        let finishAndSendKey: FinishAndSendKey =
+            output.autoSendKey.isEnabled
+            ? output.autoSendKey
+            : (sendAfterPaste ? selectedKey : .none)
         Task { @MainActor in
             let pasteOutcome = await pasteTask.value
 

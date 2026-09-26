@@ -56,11 +56,17 @@ struct EnhancementRuntimeConfiguration {
 struct OutputRuntimeConfiguration {
     let mode: ModeConfig?
     let outputMode: ModeOutputMode
+    /// Key this one dictation presses after pasting, set only when the send wake
+    /// word finished it. `.none` means "no override", and delivery then falls back
+    /// to the global Finish and Send setting — which fires only when the caller
+    /// asked to send. Defaulted so upstream's own resolver keeps constructing this
+    /// without knowing about the wake word.
+    var autoSendKey: FinishAndSendKey = .none
     let customCommand: ModeCustomCommand?
 
-    /// Replace the mode's Auto Send choice for this one dictation, which is what
+    /// Replace the Finish and Send choice for this one dictation, which is what
     /// finishing by the send wake word does.
-    func overridingAutoSendKey(_ key: AutoSendKey) -> OutputRuntimeConfiguration {
+    func overridingAutoSendKey(_ key: FinishAndSendKey) -> OutputRuntimeConfiguration {
         OutputRuntimeConfiguration(
             mode: mode,
             outputMode: outputMode,

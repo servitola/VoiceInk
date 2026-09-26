@@ -149,7 +149,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     /// Cleared again whenever a recording starts, because the pipeline is not
     /// guaranteed to run at all: a failed transcription or a cancellation would
     /// otherwise leave it armed to press Return into the next dictation.
-    var pendingAutoSendOverride: AutoSendKey?
+    var pendingAutoSendOverride: FinishAndSendKey?
 
     let recorder = Recorder()
     var recordedFile: URL? = nil
