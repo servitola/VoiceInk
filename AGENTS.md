@@ -468,9 +468,15 @@ silently gain a power the user switched off. The engine feeds state in through
 `wakeWordStopsRecording` read in `toggleRecord`, `canStartListening` and
 `handleWakeWordDetection`.
 
-*The Auto Send override is one-shot, and its lifetime is the point.* `AutoSendKey` is a
-per-Mode setting; finishing by voice overrides it for that single dictation via
-`pendingAutoSendOverride` on the engine and `OutputRuntimeConfiguration.overridingAutoSendKey`.
+*The Auto Send override is one-shot, and its lifetime is the point.* Upstream 2026-09-21
+(`ac4b13e8`) deleted the per-Mode `AutoSendKey` and made Finish and Send a *global*
+`FinishAndSendKey` (`FinishAndSendSettings`), pressed only when the caller asks — the
+recorder panel's send action passes `sendAfterPaste: true` down `toggleRecord` → pipeline →
+delivery. The wake word carries its own key (`wakeWordSendKey`) and its own decision to send,
+so it still goes through `OutputRuntimeConfiguration.autoSendKey`, which the fork keeps as a
+defaulted `.none` field meaning "no override": `pendingAutoSendOverride` on the engine and
+`OutputRuntimeConfiguration.overridingAutoSendKey` set it for that single dictation, and
+`TranscriptionDelivery` prefers it over the global key when it is enabled.
 It is set only when a recording is actually running, spent inside the `outputConfiguration`
 closure `runPipeline` hands the pipeline, and cleared again whenever a new recording starts.
 That last clear is not belt-and-braces: the pipeline asks for the output configuration *after*
@@ -480,9 +486,9 @@ unrelated dictation. Consuming on first read is safe because the pipeline's seco
 (`outputForDelivery ?? outputConfiguration()`) only happens for an assistant follow-up or a
 failed transcription, and delivery returns before reading `output` in both.
 
-*It is inert outside Paste modes, by construction.* `TranscriptionDelivery` gates `autoSendKey`
-on `outputMode == .paste`, so under a `.respond` or `.customCommand` Mode the send word just
-finishes the dictation. The settings copy says so rather than the code guarding it twice.
+*It is inert outside Paste modes, by construction.* The key is pressed inside
+`TranscriptionDelivery.paste`, which `deliver` only reaches after branching `.respond` and
+`.customCommand` away, so under those Modes the send word just finishes the dictation. The settings copy says so rather than the code guarding it twice.
 
 `removeWakeWord` strips the send phrase off the tail unconditionally — it always ends
 dictation, whatever the primary word's own switch says — before the existing primary-word
