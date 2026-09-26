@@ -13,7 +13,7 @@ struct WakeWordSettingsView: View {
     @AppStorage("removeWakeWordFromTranscription") private var removeWakeWordFromTranscription = true
     @AppStorage("wakeWordStopsRecording") private var wakeWordStopsRecording = true
     @AppStorage("wakeWordSend") private var wakeWordSend = ""
-    @AppStorage("wakeWordSendKey") private var wakeWordSendKey = AutoSendKey.enter.rawValue
+    @AppStorage("wakeWordSendKey") private var wakeWordSendKey = FinishAndSendKey.enter.rawValue
     @AppStorage("wakeWordCommandModeId") private var commandModeSelection = ""
     @Environment(\.colorScheme) private var colorScheme
 
@@ -164,7 +164,7 @@ struct WakeWordSettingsView: View {
                             .foregroundColor(.secondary)
 
                         Picker("Key to press", selection: $wakeWordSendKey) {
-                            ForEach(AutoSendKey.allCases.filter { $0.isEnabled }, id: \.rawValue) { key in
+                            ForEach(FinishAndSendKey.allCases.filter { $0.isEnabled }, id: \.rawValue) { key in
                                 Text(key.displayName).tag(key.rawValue)
                             }
                         }
