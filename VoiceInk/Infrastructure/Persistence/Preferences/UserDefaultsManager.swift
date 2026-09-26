@@ -127,10 +127,10 @@ extension UserDefaults {
     /// `removeWakeWordFromTranscription` below: the key is only written once the
     /// settings picker is touched, and an unwritten key must still mean Return -
     /// pressing nothing is not what "finish and send" says on the tin.
-    var wakeWordSendKey: AutoSendKey {
+    var wakeWordSendKey: FinishAndSendKey {
         get {
             guard let raw = object(forKey: Keys.wakeWordSendKey) as? String,
-                let key = AutoSendKey(rawValue: raw)
+                let key = FinishAndSendKey(rawValue: raw)
             else { return .enter }
             return key
         }
