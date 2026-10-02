@@ -611,6 +611,29 @@ pkill -9 -f '.local-build-test/Build/Products/Debug/VoiceInk.app/Contents/MacOS'
 
 ---
 
+### 22. `The test runner hung before establishing connection` with nobody at the keyboard
+
+**Likelihood**: certain for an unattended `test` whose DerivedData is on `/Volumes/SanDisk`
+
+**Symptoms**: zero tests run; after about seven minutes xcodebuild reports
+`VoiceInk Dev (<pid>) encountered an error (The test runner hung before establishing
+connection.)`. A retry hangs the same way.
+
+**Why it happens**: the host app is loaded from removable media, so its first `open()`
+of a dylib makes the sandbox ask tccd for Removable Volumes access. Since upstream
+`711297b6` the Debug host is `com.prakashjoshipax.VoiceInk.dev`, a TCC subject with no
+grant, and the question becomes a dialog. Proof is in the result bundle — xcodebuild
+attaches a spindump of the hung host:
+
+```bash
+xcrun xcresulttool export attachments --path <.xcresult> --output-path /tmp/x
+grep -A40 'Process: *VoiceInk Dev' /tmp/x/*   # dyld open() → __WAITING_ON_APPROVAL_FROM_SANDBOXD__
+```
+
+**Fix**: keep the test DerivedData on the internal disk (`-derivedDataPath
+~/.cache/voiceink-upstream-sync/test-dd`, as the sync job does). Clicking "Allow" once
+also works, until the next signing change makes it a new subject again.
+
 ## Prevention Best Practices
 
 ### Before Building
