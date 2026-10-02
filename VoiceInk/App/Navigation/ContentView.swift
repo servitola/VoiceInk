@@ -102,7 +102,7 @@ struct ContentView: View {
         case .settings:
             SettingsView()
         case .license:
-            LicenseManagementView()
+            AboutView()
         }
     }
 }
