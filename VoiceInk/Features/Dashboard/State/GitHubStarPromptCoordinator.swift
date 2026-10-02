@@ -148,10 +148,16 @@ final class GitHubStarPromptCoordinator: ObservableObject {
 
     // Once Later has been clicked, the toast retires for good; the persistent footer button takes over.
     private static var shouldShow: Bool {
-        let defaults = UserDefaults.standard
-        if defaults.bool(forKey: Keys.hasStarred) { return false }
-        if defaults.bool(forKey: Keys.hasDeferredOnce) { return false }
-        return true
+        #if LOCAL_BUILD
+            // The fork's own builds don't advertise the upstream repo; the footer button stays
+            // hidden too, since it only appears after "Later" on a card that never shows.
+            return false
+        #else
+            let defaults = UserDefaults.standard
+            if defaults.bool(forKey: Keys.hasStarred) { return false }
+            if defaults.bool(forKey: Keys.hasDeferredOnce) { return false }
+            return true
+        #endif
     }
 
     private func hasReachedSessionThreshold() async -> Bool {
