@@ -7,23 +7,26 @@ This document contains the exact steps needed to build and run this fork after r
 The build auto-detects the host CPU, so the **same command works on both**:
 
 ```bash
-make local-stable   # or: make local / make build
+make build          # install: see the identity below
 ```
 
 Never plain `make local`: it signs ad-hoc, so macOS revokes the app's permissions on
 every reinstall (it now refuses to overwrite a stably-signed `/Applications/VoiceInk.app`
 unless you pass `FORCE_ADHOC=1`).
 
-`make local-stable` is right only for the **first** build on a machine, where it creates
-the `VoiceInk Local Signing` certificate. Once that certificate exists, pass it in
-explicitly instead — `local-stable` runs `scripts/create-local-signing-cert.sh`, which
-deletes and re-mints the certificate whenever `security find-identity` fails to see it,
-and a new certificate drops every TCC grant silently:
+The installed app is signed with the **Developer ID** (team `NZNV266K59`) since 2026-10-02,
+and macOS pins the TCC grants to that. Install by hand with the same identity, by hash —
+the Makefile splices it into `codesign` unquoted:
 
 ```bash
-make local LOCAL_SIGN_IDENTITY="$(security find-identity -p codesigning \
-  | awk 'index($0, "VoiceInk Local Signing") {print $2; exit}')"
+make local LOCAL_SIGN_IDENTITY="$(security find-identity -v -p codesigning \
+  | awk 'index($0, "Developer ID Application: Vladislav Konovalov") {print $2; exit}')"
 ```
+
+Any other identity is a different designated requirement, and every grant drops silently.
+`make local-stable` is worse than useless now: it mints the self-signed `VoiceInk Local
+Signing` certificate, which only the test gate still uses (`scripts/create-local-signing-cert.sh`
+deletes and re-mints it whenever `security find-identity` misses it).
 
 `make check-tcc` answers "does macOS still recognise the installed build?" — see
 COMMON-ISSUES.md §12b.
@@ -302,6 +305,18 @@ only that surface. Do not delete the type — both take it from the environment.
 
 `VoiceInkTests/UpdaterViewModelTests.swift` fails if any of this regresses.
 
+### 5. About tab and GitHub star prompt
+
+The sidebar's About tab renders the fork's own `Features/About/AboutView.swift` — version
+and links, no purchase, trial, key or affiliate UI. `ContentView` must route `.license` to
+`AboutView()`; a rebase that brings back `LicenseManagementView()` there brings the
+paywall screen back with it. The vendor's licensing views stay in the tree as dead code on
+purpose: deleting files upstream keeps editing turns every rebase into a modify/delete
+conflict.
+
+`GitHubStarPromptCoordinator.shouldShow` returns `false` under `LOCAL_BUILD`, which keeps
+both the Dashboard card and its footer button hidden.
+
 ## Troubleshooting
 
 ### Build fails with "Library not loaded: @rpath/libwhisper.1.dylib"
@@ -359,26 +374,24 @@ no `ggml` lines. `make whisper` skips rebuilding when `build-apple/` already
 exists, so a stale/dynamic xcframework there silently poisons every rebuild -
 delete `build-apple/` to force a clean self-contained rebuild.
 
-## Automated upstream sync (cron)
+## Automated upstream sync
 
-A nightly job syncs this fork with upstream — it does NOT live in this repo:
+A job outside this repo keeps the fork rebased, built, released and installed:
+`~/projects/forks/jobs/voiceink/sync.sh`, LaunchAgent `com.servitola.voiceink-upstream-sync`,
+Mon/Thu/Sat 04:30, log `~/projects/forks/logs/voiceink-upstream-sync.log`. Its header
+comments are the documentation; the short version:
 
-- Fragment: `dotfiles_private/cron/cron_jobs/voiceink.private.cron` — 04:15 daily
-- Script: `dotfiles_private/cron/scripts/voiceink-upstream-sync.sh`
-- Log: `dotfiles/cron/logs/voiceink-upstream-sync.log`
+- Rebase onto `github.com/main`; a conflict goes to an agent that may only edit files.
+- Gate: build-for-testing and `VoiceInkTests`, DerivedData in
+  `~/.cache/voiceink-upstream-sync/test-dd` — on the internal disk, because a test host
+  loaded from `/Volumes/SanDisk` waits on a Removable Volumes TCC prompt (see
+  COMMON-ISSUES.md §22). A red gate gets two agent rounds, then stops.
+- Install: `make local` signed with the **Developer ID**, then publish: push `main`,
+  `publish-app.sh --notarize` re-signs a copy hardened, notarizes, staples, releases it
+  and bumps `servitola/tap/voiceink`, and brew reinstalls from the tap.
 
-The script does not reimplement the sync: it feeds `.claude/commands/sync-upstream.md`
-(the single source of truth) to `codex exec`, so editing that runbook changes what the
-cron does. The wrapper owns only the cheap deterministic parts — preflight gates
-(repo mounted, on `main`, clean tree, no rebase in progress), the "are we behind?"
-check that skips the agent entirely on a no-op day, and an **independent** re-verification
-afterwards (upstream is an ancestor, no conflict markers, installed version matches,
-bundle carries `Authority=VoiceInk Local Signing`, app actually running) — because an
-agent can report success it did not achieve.
-
-**It never pushes.** `ALLOW_PUSH=0` plus a prompt override forbidding `git push`, so
-commits accumulate locally and the Telegram notification carries the push command.
-Someone must push by hand periodically. Flip `ALLOW_PUSH=1` to change that.
+`.git/hooks/pre-push` is a symlink to `jobs/voiceink/pre-push` in that repo: `main` can be
+pushed only as the commit the job last verified. Re-create the link after a fresh clone.
 
 ## Wake word (fork feature)
 
