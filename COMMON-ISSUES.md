@@ -523,11 +523,54 @@ Anything hand-rolled needs them spelled out:
 xcodebuild ... -skipPackagePluginValidation -skipMacroValidation
 ```
 
-The toolchain is a one-time download:
+The toolchain is a download, **not** a one-time one:
 
 ```bash
-xcodebuild -downloadComponent MetalToolchain
+xcodebuild -downloadComponent MetalToolchain   # ~840 MB, unattended, no sudo needed
+xcrun metal --version                          # verify
 ```
+
+It needs no elevation and asks nothing: measured on 2026-10-15 it ran to `Done downloading:
+Metal Toolchain 27A266a` and exited 0 from a non-interactive session. Afterwards
+`xcodebuild -showComponent MetalToolchain` reports `Status: installed` plus the cryptex mount
+the compiler actually runs from (`…/com.apple.MobileAsset.MetalToolchain-v27.1.266.1.*`),
+which is the quickest proof the right asset is live.
+
+**It is pinned to the Xcode build version, so every Xcode upgrade un-installs it.**
+It is a MobileAsset, and Xcode asks for the asset whose `Build` equals its own
+`ProductBuildVersion` — any other asset on disk is invisible to it, however recently it
+was downloaded. That is how the 2026-10-15 nightly gate went red: `/var/db/xcode_select_link`
+was re-pointed at Xcode 27.0 (`27A266a`) on 10-11, while the newest asset on disk was
+`17F109`, downloaded for Xcode 26.5 in August. The last green gate, on 10-02, had compiled
+the same shaders with
+`/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.29btt0/Metal.xctoolchain/usr/bin/metal`
+— so nothing in the repo or in the rebase had changed; the compiler had moved out from under
+it. The Xcode upgrade is also what forced the shaders to be rebuilt at all (a new compiler
+version invalidates DerivedData, hence the flood of `Removed stale file` notes above the
+error), which is why the breakage waited two weeks for the first non-incremental build.
+
+Diagnose it without a build — `xcrun -f metal` is useless here, since the stub in the Xcode
+bundle always exists and only fails when executed:
+
+```bash
+xcrun metal --version                                   # the real test
+xcodebuild -showComponent MetalToolchain                # Build Version + installed/uninstalled
+/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' /Applications/Xcode.app/Contents/version.plist
+plutil -p /System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/*.asset/Info.plist \
+  | grep -w Build                                       # what is actually on disk
+```
+
+`-showComponent` is the one that answers the question outright: it prints the build version
+Xcode wants alongside `Status: installed` or `uninstalled`, so it distinguishes "no asset at
+all" from "assets on disk, none of them matching" without comparing hashes by eye. On 10-15
+it read `Build Version: 27A266a` / `Status: uninstalled` while the `.asset` directories held
+only `17C7003j` and `17F109` — the two Xcode 26.x downloads.
+
+`scripts/arch-xcodebuild.sh` now runs that check before any compiling action and refuses
+with the download command, so the failure costs two seconds instead of a 20-minute build
+and a pointless agent round. Nothing in this repo can substitute for the download:
+mlx-swift compiles its shaders on every Apple platform and has no opt-out, and stripping
+the package would quietly ship a build without VoiceInk Refine.
 
 ---
 

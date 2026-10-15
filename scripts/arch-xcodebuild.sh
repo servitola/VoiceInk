@@ -16,6 +16,9 @@
 # Override the detected arch with VOICEINK_TARGET_ARCH=x86_64|arm64 (used by CI or
 # to test the Intel path from an Apple Silicon machine).
 #
+# A compiling action is also refused up front when the downloadable Metal toolchain
+# is missing, since mlx-swift's shaders cannot build without it (see below).
+#
 # All arguments are forwarded verbatim to xcodebuild.
 set -euo pipefail
 
@@ -30,6 +33,48 @@ restore_project() {
     if [ -f "$PBXPROJ.fa-bak" ]; then mv -f "$PBXPROJ.fa-bak" "$PBXPROJ"; fi
     if [ -f "$RESOLVED.fa-bak" ]; then mv -f "$RESOLVED.fa-bak" "$RESOLVED"; fi
 }
+
+# Xcode 26 and newer ship no Metal compiler: it is a downloadable component, a
+# MobileAsset pinned to the Xcode *build version*, so upgrading Xcode silently
+# un-installs it — the asset already on disk stops matching and `metal` refuses to
+# run. mlx-swift (VoiceInk Refine) compiles .metal shaders on every clean build, so
+# any compiling action is then guaranteed to die on `cannot execute tool 'metal'`,
+# 20 minutes in and after a full package rebuild. No change in this repo can fix
+# that, so spend two seconds here and name the one thing that does.
+# Escape hatch: VOICEINK_SKIP_METAL_CHECK=1.
+needs_metal=0
+for arg in "$@"; do
+    case "$arg" in
+        build|build-for-testing|test|archive|install) needs_metal=1 ;;
+    esac
+done
+
+if [ "$needs_metal" = 1 ] && [ "${VOICEINK_SKIP_METAL_CHECK:-0}" != "1" ] \
+   && ! xcrun metal --version >/dev/null 2>&1; then
+    # PlistBuddy reports a missing file on *stdout* ("File Doesn't Exist, Will Create: …")
+    # and still exits non-zero, so neither 2>/dev/null nor a || fallback keeps that out of
+    # the message — take the value only when it looks like a build version.
+    # The trailing `|| true` is load-bearing: `set -e` plus `pipefail` would otherwise
+    # abort here on PlistBuddy's non-zero exit and swallow the whole message.
+    xcode_build_version=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' \
+        "$(xcode-select -p)/../version.plist" 2>/dev/null | head -1 || true)
+    case "$xcode_build_version" in
+        ''|*[!0-9A-Za-z]*) xcode_build_version="version unknown" ;;
+    esac
+    cat >&2 <<EOF
+==> ERROR: no Metal toolchain for this Xcode ($xcode_build_version) — mlx-swift's
+    shaders cannot compile, so the build would fail on 'cannot execute tool metal'.
+    Install the component matching this Xcode, then re-run this build:
+
+        xcodebuild -downloadComponent MetalToolchain
+
+    That is ~840 MB and takes a few minutes, but it runs unattended: no sudo, no
+    prompt. Verify with 'xcrun metal --version', or
+    'xcodebuild -showComponent MetalToolchain' for the asset Xcode is asking for.
+    Expect this after every Xcode upgrade — see COMMON-ISSUES.md §19.
+EOF
+    exit 1
+fi
 
 if [ "$ARCH" = "x86_64" ]; then
     echo "==> Intel (x86_64) host — building WITHOUT FluidAudio/Parakeet (whisper.cpp engine only)."
