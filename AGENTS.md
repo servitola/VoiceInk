@@ -673,7 +673,28 @@ Unicode word boundary treats `_` as a separator, so `foo_клод_bar` still get
 
 ## Handoff
 
-**Latest (2026-08-14): the nightly sync had never once succeeded; rewritten without an
+**Latest (2026-10-15): the red gate was the Xcode 27 upgrade, not the rebase.** The build died on
+`cannot execute tool 'metal'` in mlx-swift's shaders. The rebase was innocent — it brought
+five upstream commits touching two Swift files and no package change at all. The Metal
+toolchain is a downloadable component pinned to the Xcode *build version*, `xcode-select`
+was re-pointed at Xcode 27.0 on 10-11, and only the Xcode 26.5-era asset was on disk, so
+the compiler the last green gate had used (10-02) no longer existed. The fix is
+`xcodebuild -downloadComponent MetalToolchain` — nothing in the repo can substitute for it,
+and stripping mlx-swift would quietly ship a build without VoiceInk Refine.
+`scripts/arch-xcodebuild.sh` now refuses a compiling action in two seconds with that
+command when `xcrun metal --version` fails; COMMON-ISSUES.md §19 has the evidence and the
+diagnostics. **Expect this after every Xcode upgrade.**
+
+**That command does not need a human.** Run on 10-15 it exited 0 unattended — no `sudo`, no
+prompt, no TCC dialog — fetching 838.9 MB and reporting `Done downloading: Metal Toolchain
+27A266a`; `xcodebuild -showComponent MetalToolchain` then flipped from `Status: uninstalled`
+to `installed`. So the nightly job could recover from this by itself instead of waiting for
+someone to notice a red gate. The guard deliberately still only *reports* the command rather
+than running it: `arch-xcodebuild.sh` also backs every interactive `make build`, and a build
+wrapper that silently pulls ~800 MB is a worse surprise than a two-second failure. Wiring the
+download into the sync job (which already runs unattended at 04:30) is the owner's call.
+
+**2026-08-14: the nightly sync had never once succeeded; rewritten without an
 agent, `HEAD` un-broken, 2.11 installed.** The 04:15 job had been reporting `FAILED` every
 day since it was created — the log contains no `VERIFIED ok` at all. The rebase half
 always worked; the gate half never ran, so nobody learned that `HEAD` had not compiled
